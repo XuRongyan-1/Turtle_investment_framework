@@ -3,7 +3,7 @@
     "version": "1.0",
     "project": "Turtle Investment Framework v1.0",
     "description": "Comprehensive feature list for incremental implementation. Each feature should be implementable and testable in a single Claude Code session. CRITICAL: It is unacceptable to remove or edit tests because this could lead to missing or buggy functionality. Only mark a feature as passes=true after its tests pass.",
-    "total_features": 95,
+    "total_features": 107,
     "categories": [
       "infrastructure",
       "phase0_pdf_download",
@@ -16,7 +16,8 @@
       "error_handling",
       "output_format",
       "integration",
-      "packaging"
+      "packaging",
+      "screener"
     ]
   },
   "features": [
@@ -1161,6 +1162,156 @@
         "Factor 4: update output template with 绝对估值 and 基准价",
         "Phase 3: add §17.8 reference in Step 6 description",
         "Add 4 prompt validation tests"
+      ],
+      "passes": true
+    },
+    {
+      "id": 96,
+      "category": "screener",
+      "description": "Screener scaffolding: ScreenerConfig dataclass and bulk mock fixtures",
+      "steps": [
+        "Create scripts/screener_config.py with ScreenerConfig dataclass",
+        "Create notebooks/ directory",
+        "Create tests/fixtures/mock_tushare_responses/stock_basic_bulk.json",
+        "Create tests/fixtures/mock_tushare_responses/daily_basic_bulk.json",
+        "Write test_screener.py: TestScreenerConfig + TestBulkMockFixtures",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 97,
+      "category": "screener",
+      "description": "TushareScreener class skeleton + Tier 1 bulk data fetching with cache",
+      "steps": [
+        "Create scripts/screener_core.py with TushareScreener class",
+        "Implement _get_latest_trade_date() via trade_cal API",
+        "Implement _tier1_bulk_data(): stock_basic() + daily_basic(trade_date) bulk calls",
+        "Implement ScreenerCache: Parquet-based disk cache with TTL",
+        "Wire cache into _tier1_bulk_data()",
+        "Write tests: TestScreenerCache + TestTier1BulkData",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 98,
+      "category": "screener",
+      "description": "Tier 1 filter pipeline: ST removal, listing age, market cap, turnover, PB, dividend, dual-channel PE",
+      "steps": [
+        "Implement _tier1_filter(): 6 hard filters + dual-channel PE",
+        "Return filtered DataFrame with 'channel' column",
+        "Write tests: TestTier1Filter (13 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 99,
+      "category": "screener",
+      "description": "Tier 1 ranking and cutoff: composite score for main channel, merge with observation channel",
+      "steps": [
+        "Implement _tier1_rank_and_cut(): scoring + limit + merge",
+        "Write tests: TestTier1RankAndCut (5 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 100,
+      "category": "screener",
+      "description": "Tier 2 hard vetoes: pledge ratio >70% and non-standard audit opinion, with early termination",
+      "steps": [
+        "Implement _check_hard_vetoes(ts_code)",
+        "Write tests: TestTier2HardVetoes (4 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 101,
+      "category": "screener",
+      "description": "Tier 2 financial quality filter: ROE, gross margin, debt ratio, observation channel profit_dedt check",
+      "steps": [
+        "Implement _check_financial_quality(ts_code, channel)",
+        "Write tests: TestTier2FinancialQuality (7 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 102,
+      "category": "screener",
+      "description": "Tier 2 Factor 2 metrics: payout ratio M, penetration return R, threshold II",
+      "steps": [
+        "Implement _extract_factor2_metrics(ts_code, total_mv_wan)",
+        "Cache Rf globally",
+        "Write tests: TestFactor2Metrics (3 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 103,
+      "category": "screener",
+      "description": "Tier 2 Factor 4 metrics: EV/EBITDA, cash-adjusted PE, FCF yield, net debt/EBITDA, goodwill ratio",
+      "steps": [
+        "Implement _extract_factor4_metrics(ts_code, close, total_mv_wan)",
+        "Compute FCF consistency",
+        "Write tests: TestFactor4Metrics (5 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 104,
+      "category": "screener",
+      "description": "Tier 2 floor price: 5 baseline methods, composite median, premium vs current price",
+      "steps": [
+        "Implement _extract_floor_price(ts_code, close, total_mv_wan)",
+        "5 methods: net liquid assets, BVPS, 10yr low, dividend implied, pessimistic FCF",
+        "Write tests: TestFloorPrice (3 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 105,
+      "category": "screener",
+      "description": "Composite scoring: percentile ranking across 5 dimensions with configurable weights",
+      "steps": [
+        "Implement _compute_rankings(df)",
+        "Write tests: TestCompositeScoring (5 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 106,
+      "category": "screener",
+      "description": "Full pipeline orchestration: run() method, CLI argparse, CSV/HTML export",
+      "steps": [
+        "Implement run() and _analyze_single_stock()",
+        "Add CLI argparse with --tier1-only, --tier2-limit, etc.",
+        "Implement export_csv() and export_html()",
+        "Write tests: TestPipelineAndExport (4 tests)",
+        "Run pytest -- all pass"
+      ],
+      "passes": true
+    },
+    {
+      "id": 107,
+      "category": "screener",
+      "description": "Interactive Jupyter Notebook: 7-cell screener with visualizations",
+      "steps": [
+        "Create notebooks/screener.ipynb",
+        "Cell 1: env init, config display",
+        "Cell 2: Tier 1 bulk screening + charts",
+        "Cell 3: Tier 1 rank & cut + scatter plot",
+        "Cell 4: Tier 2 deep analysis with progress bar",
+        "Cell 5: composite ranking styled DataFrame",
+        "Cell 6: export results",
+        "Cell 7: single-stock detail viewer"
       ],
       "passes": true
     }

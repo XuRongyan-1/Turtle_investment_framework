@@ -5,11 +5,11 @@
 ## Project Status
 - Version: v1.0 (upgrading from v0.16_alpha)
 - Architecture: Python scripts (Tushare) + LLM prompts (analysis)
-- Current phase: WAVE 1-5 + PDF PREPROCESSOR + MDA + SUB + PHASE 3 PROMPTS + §17 DERIVED METRICS + §17.8 EV BASELINE COMPLETE
-- Features completed: 74/95
+- Current phase: WAVE 1-5 + PDF PREPROCESSOR + MDA + SUB + PHASE 3 PROMPTS + §17 DERIVED METRICS + §17.8 EV BASELINE + SCREENER COMPLETE
+- Features completed: 86/107
 - Last session: 2026-03-08
 - Python env: /opt/anaconda3/envs/py10/bin/python (Python 3.10.13)
-- Tests: 451 passing (excl. pdf_preprocessor; ~456 with pdfplumber installed)
+- Tests: 442 passing (excl. pdf_preprocessor; ~447 with pdfplumber installed)
 
 ## Implementation Wave Order
 1. Infrastructure (#1-#8) - COMPLETE
@@ -23,6 +23,7 @@
 9. Integration + Packaging (#71-#78) - NOT STARTED
 10. §17 Derived Metrics (#90-#93) - COMPLETE
 11. §17.8 EV Baseline (#94-#95) - COMPLETE
+12. Screener (#96-#107) - COMPLETE
 
 ## Completed Features
 - #1: Project scaffolding verification ✓
@@ -94,6 +95,18 @@
 - #93: Phase 3 prompt updates to reference §17 pre-computed metrics ✓
 - #94: §17.8 EV baseline + "买入就是胜利"基准价 (valuation dashboard, 5-method floor price, premium analysis) ✓
 - #95: Factor 4 prompt Step 5 + §17.8 reference + output template update ✓
+- #96: Screener scaffolding (ScreenerConfig dataclass + bulk mock fixtures) ✓
+- #97: TushareScreener class + Tier 1 bulk data + Parquet cache ✓
+- #98: Tier 1 filter pipeline (ST, listing age, market cap, turnover, PB, dividend, dual-channel PE) ✓
+- #99: Tier 1 ranking and cutoff (composite score, channel merge) ✓
+- #100: Tier 2 hard vetoes (pledge ratio, audit opinion, early termination) ✓
+- #101: Tier 2 financial quality (ROE, gross margin, debt ratio, observation profit_dedt) ✓
+- #102: Tier 2 Factor 2 (payout M, penetration R, threshold II, Rf cache) ✓
+- #103: Tier 2 Factor 4 (EV/EBITDA, cash-adj PE, FCF yield, goodwill ratio) ✓
+- #104: Tier 2 floor price (5-method baseline, composite median, premium) ✓
+- #105: Composite scoring (percentile ranking, 5-dimension weighted) ✓
+- #106: Pipeline orchestration + CLI argparse + CSV/HTML export ✓
+- #107: Jupyter Notebook (7 cells, matplotlib charts, tqdm progress) ✓
 
 ## Current Blockers
 - [ ] TUSHARE_TOKEN needed for live integration tests (#74)
@@ -111,14 +124,18 @@
 - tests/test_pdf_preprocessor.py: 72 tests (keywords, extraction, scoring, pipeline, tables, MDA, SUB)
 - tests/test_phase3_prompt.py: 112 tests (prompt validation + optimization A/B/C + §17 references + §17.8)
 - tests/test_derived_metrics.py: 78 tests (§17.1-17.8 derived metrics computation)
-- Total: 451 tests passing (excl. pdf_preprocessor; ~456 with pdfplumber installed)
+- tests/test_screener.py: 75 tests (ScreenerConfig, cache, Tier 1 filter/rank, Tier 2 vetoes/quality/Factor2/Factor4/floor, scoring, pipeline)
+- Total: 442 tests passing (excl. pdf_preprocessor; ~447 with pdfplumber installed)
 
 ## Key Files
 - scripts/config.py: get_token, validate_stock_code, check_local_pdf, validate_pdf
 - scripts/format_utils.py: format_number, format_table, format_header
 - scripts/tushare_collector.py: TushareClient (15 get_* methods + compute_derived_metrics), WarningsCollector, CLI
 - scripts/pdf_preprocessor.py: extract_all_pages, find_section_pages, extract_section_context, run_pipeline
-- tests/fixtures/mock_tushare_responses/: 13 JSON fixtures
+- scripts/screener_config.py: ScreenerConfig dataclass (Tier 1/2 thresholds, scoring weights, cache)
+- scripts/screener_core.py: TushareScreener (Tier 1 bulk + Tier 2 deep analysis), ScreenerCache, CLI
+- notebooks/screener.ipynb: 7-cell interactive Jupyter Notebook with matplotlib visualizations
+- tests/fixtures/mock_tushare_responses/: 15 JSON fixtures (incl. stock_basic_bulk, daily_basic_bulk)
 
 ## Session Log
 ### Session 1 - 2026-03-06
@@ -278,3 +295,23 @@
   - Phase 3 Step 6: added §17.8 reference
   - Added 4 prompt validation tests
 - Total: 451 tests passing (excl. pdf_preprocessor; ~456 with pdfplumber)
+
+### Session 13 - 2026-03-08
+- Implemented features #96-#107: 龟龟选股器 (Turtle Screener) — 12 features
+- Architecture: Two-tier screening (Tier 1 bulk → Tier 2 deep analysis)
+- #96: ScreenerConfig dataclass + bulk mock fixtures (stock_basic_bulk.json, daily_basic_bulk.json)
+- #97: TushareScreener class + ScreenerCache (Parquet-based, TTL) + Tier 1 bulk data
+- #98: Tier 1 filter pipeline (ST/PT removal, listing age, market cap, turnover, PB, dividend, dual-channel PE)
+- #99: Tier 1 ranking (composite score: dv×0.4 + 1/PE×0.3 + 1/PB×0.3) + cutoff (150 main + 50 obs)
+- #100: Tier 2 hard vetoes (pledge >70% reject, non-standard audit reject, early termination)
+- #101: Tier 2 financial quality (ROE≥8%, gross margin≥15%, debt≤70%, observation channel profit_dedt)
+- #102: Factor 2 metrics (payout M, penetration R, threshold II, global Rf cache)
+- #103: Factor 4 metrics (EV/EBITDA, cash-adj PE, FCF yield, goodwill ratio, FCF consistency)
+- #104: Floor price (5-method baseline, composite median, premium analysis)
+- #105: Composite scoring (5-dimension percentile ranking with configurable weights)
+- #106: Pipeline orchestration + CLI (--tier1-only, --tier2-limit, --csv, --html, --cache-refresh)
+- #107: Jupyter Notebook (7 cells: init/filter/rank/analyze/score/export/detail, matplotlib charts)
+- New files: scripts/screener_config.py, scripts/screener_core.py, notebooks/screener.ipynb
+- Updated: feature_list.json (95→107 features, new "screener" category), requirements.txt (+pyarrow,matplotlib,tqdm)
+- Added 75 new tests in tests/test_screener.py
+- Total: 442 tests passing (excl. pdf_preprocessor; ~447 with pdfplumber)
