@@ -541,8 +541,15 @@ class TestSensitivityBase:
         result = client._compute_factor3_sensitivity_base()
         assert "15,937.00" in result
 
-    def test_aa_incl(self):
-        """AA_incl: mean of [15937, 15239, 18515, 16602] ≈ 16573.25 → 16,573.25."""
+    def test_aa_2y_default(self):
+        """AA_2y (default): mean of [15937, 15239] = 15588.00 → 15,588.00."""
+        client = _make_client_with_store()
+        self._run_prerequisites(client)
+        result = client._compute_factor3_sensitivity_base()
+        assert "15,588.00" in result or "15,588" in result
+
+    def test_aa_all_reference(self):
+        """AA_all (reference): mean of [15937, 15239, 18515, 16602] ≈ 16573.25 → 16,573.25."""
         client = _make_client_with_store()
         self._run_prerequisites(client)
         result = client._compute_factor3_sensitivity_base()

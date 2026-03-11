@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import functools
+import os
 import sys
 import time
 
@@ -24,8 +25,124 @@ try:
 except ImportError:
     _yf_available = False
 
-from config import get_token, validate_stock_code
+from config import get_token, get_api_url, validate_stock_code
 from format_utils import format_number, format_table, format_header
+
+
+# VIP API name mapping: standard → VIP endpoint (identical params/schema, higher tier)
+_VIP_MAP = {
+    "income": "income_vip",
+    "balancesheet": "balancesheet_vip",
+    "cashflow": "cashflow_vip",
+    "fina_indicator": "fina_indicator_vip",
+    "fina_mainbz": "fina_mainbz_vip",
+    "forecast": "forecast_vip",
+    "express": "express_vip",
+}
+
+# HK line-item field mappings: Tushare column name → HK ind_name (Chinese)
+HK_INCOME_MAP = {
+    "revenue": "营业额",
+    "oper_cost": "营运支出",
+    "sell_exp": "销售及分销费用",
+    "admin_exp": "行政开支",
+    "operate_profit": "经营溢利",
+    "invest_income": "应占联营公司溢利",
+    "int_income": "利息收入",
+    "finance_exp": "融资成本",
+    "total_profit": "除税前溢利",
+    "income_tax": "税项",
+    "n_income": "除税后溢利",
+    "n_income_attr_p": "股东应占溢利",
+    "minority_gain": "少数股东损益",
+    "basic_eps": "每股基本盈利",
+    "diluted_eps": "每股摊薄盈利",
+}
+
+HK_BALANCE_MAP = {
+    "money_cap": "现金及等价物",
+    "accounts_receiv": "应收帐款",
+    "inventories": "存货",
+    "total_cur_assets": "流动资产合计",
+    "lt_eqt_invest": "联营公司权益",
+    "fix_assets": "物业厂房及设备",
+    "cip": "在建工程",
+    "intang_assets": "无形资产",
+    "total_assets": "总资产",
+    "acct_payable": "应付帐款",
+    "notes_payable": "应付票据",
+    "contract_liab": "递延收入(流动)",
+    "st_borr": "短期贷款",
+    "total_cur_liab": "流动负债合计",
+    "lt_borr": "长期贷款",
+    "bond_payable": "应付票据(非流动)",
+    "total_liab": "总负债",
+    "defer_tax_assets": "递延税项资产",
+    "defer_tax_liab": "递延税项负债",
+    "total_hldr_eqy_exc_min_int": "股东权益",
+    "minority_int": "少数股东权益",
+}
+
+HK_CASHFLOW_MAP = {
+    "n_cashflow_act": "经营业务现金净额",
+    "n_cashflow_inv_act": "投资业务现金净额",
+    "n_cash_flows_fnc_act": "融资业务现金净额",
+    "c_pay_acq_const_fiolta": "购建无形资产及其他资产",
+    "depr_fa_coga_dpba": "折旧及摊销",
+    "c_pay_dist_dpcp_int_exp": "已付股息(融资)",
+    "c_paid_for_taxes": "已付税项",
+    "c_recp_return_invest": "收回投资所得现金",
+}
+
+# yfinance field mappings: yfinance index name → Tushare column name
+# Both CamelCase and space-separated variants included (format varies by yfinance version)
+_YF_INCOME_MAP = {
+    "Total Revenue": "revenue", "TotalRevenue": "revenue",
+    "Cost Of Revenue": "oper_cost", "CostOfRevenue": "oper_cost",
+    "Selling General And Administration": "admin_exp",
+    "SellingGeneralAndAdministration": "admin_exp",
+    "Operating Income": "operate_profit", "OperatingIncome": "operate_profit",
+    "Interest Expense": "finance_exp", "InterestExpense": "finance_exp",
+    "Pretax Income": "total_profit", "PretaxIncome": "total_profit",
+    "Tax Provision": "income_tax", "TaxProvision": "income_tax",
+    "Net Income": "n_income", "NetIncome": "n_income",
+    "Net Income Common Stockholders": "n_income_attr_p",
+    "NetIncomeCommonStockholders": "n_income_attr_p",
+    "Basic EPS": "basic_eps", "BasicEPS": "basic_eps",
+    "Diluted EPS": "diluted_eps", "DilutedEPS": "diluted_eps",
+}
+
+_YF_BALANCE_MAP = {
+    "Cash And Cash Equivalents": "money_cap",
+    "CashAndCashEquivalents": "money_cap",
+    "Accounts Receivable": "accounts_receiv", "AccountsReceivable": "accounts_receiv",
+    "Inventory": "inventories",
+    "Current Assets": "total_cur_assets", "CurrentAssets": "total_cur_assets",
+    "Investments And Advances": "lt_eqt_invest",
+    "Net PPE": "fix_assets", "NetPPE": "fix_assets",
+    "Goodwill And Other Intangible Assets": "intang_assets",
+    "Total Assets": "total_assets", "TotalAssets": "total_assets",
+    "Accounts Payable": "acct_payable", "AccountsPayable": "acct_payable",
+    "Current Debt": "st_borr", "CurrentDebt": "st_borr",
+    "Current Liabilities": "total_cur_liab", "CurrentLiabilities": "total_cur_liab",
+    "Long Term Debt": "lt_borr", "LongTermDebt": "lt_borr",
+    "Total Liabilities Net Minority Interest": "total_liab",
+    "Stockholders Equity": "total_hldr_eqy_exc_min_int",
+    "StockholdersEquity": "total_hldr_eqy_exc_min_int",
+    "Minority Interest": "minority_int", "MinorityInterest": "minority_int",
+}
+
+_YF_CASHFLOW_MAP = {
+    "Operating Cash Flow": "n_cashflow_act", "OperatingCashFlow": "n_cashflow_act",
+    "Investing Cash Flow": "n_cashflow_inv_act", "InvestingCashFlow": "n_cashflow_inv_act",
+    "Financing Cash Flow": "n_cash_flows_fnc_act", "FinancingCashFlow": "n_cash_flows_fnc_act",
+    "Capital Expenditure": "c_pay_acq_const_fiolta", "CapitalExpenditure": "c_pay_acq_const_fiolta",
+    "Depreciation And Amortization": "depr_fa_coga_dpba",
+    "DepreciationAndAmortization": "depr_fa_coga_dpba",
+    "Common Stock Dividend Paid": "c_pay_dist_dpcp_int_exp",
+    "Income Tax Paid Supplemental Data": "c_paid_for_taxes",
+    "Sale Of Investment": "c_recp_return_invest",
+}
 
 
 def rate_limit(func):
@@ -43,12 +160,21 @@ class TushareClient:
     MAX_RETRIES = 5
     RETRY_DELAY = 2.0  # seconds between retries
 
+    BASIC_CACHE_TTL = 7 * 86400  # 7 days in seconds
+
     def __init__(self, token: str):
         ts.set_token(token)
         self.pro = ts.pro_api(timeout=30)
         self.token = token
         self._store = {}  # {key: pd.DataFrame} for derived metrics computation
         self._yf_available = _yf_available
+        self._cache_dir = os.path.join("output", ".collector_cache")
+        # Broker API support: route calls through custom URL + enable VIP endpoints
+        api_url = get_api_url()
+        self._vip_mode = bool(api_url)
+        if api_url:
+            self.pro._DataApi__token = token
+            self.pro._DataApi__http_url = api_url
 
     @staticmethod
     def _detect_currency(ts_code: str) -> str:
@@ -65,8 +191,8 @@ class TushareClient:
         elif suffix == "SZ":
             return f"{code}.SZ"
         elif suffix == "HK":
-            # Remove leading zeros for HK stocks (e.g., 00700 -> 0700)
-            return f"{code.lstrip('0') or '0'}.HK"
+            # Tushare 5-digit → YF 4-digit (e.g., 00700 -> 0700)
+            return f"{code.lstrip('0').zfill(4)}.HK"
         return ts_code
 
     def _yf_fallback_price(self, ts_code: str) -> dict | None:
@@ -84,9 +210,184 @@ class TushareClient:
         except Exception:
             return None
 
+    @staticmethod
+    def _is_hk(ts_code: str) -> bool:
+        """Check if stock code is a Hong Kong listing."""
+        return ts_code.upper().endswith(".HK")
+
+    @staticmethod
+    def _pivot_hk_line_items(df: pd.DataFrame, field_map: dict) -> pd.DataFrame:
+        """Pivot HK ind_name/ind_value rows into one-row-per-period columns.
+
+        HK financial APIs return data in line-item format:
+            end_date | ind_name   | ind_value
+            20241231 | 营业额     | 60000
+            20241231 | 除税后溢利 | 10000
+        This pivots them into columnar format matching A-share structure.
+        """
+        if df.empty or "ind_name" not in df.columns:
+            return pd.DataFrame()
+
+        reverse_map = {v: k for k, v in field_map.items() if v is not None}
+        df_mapped = df[df["ind_name"].isin(reverse_map)].copy()
+        if df_mapped.empty:
+            return pd.DataFrame()
+
+        df_mapped["field"] = df_mapped["ind_name"].map(reverse_map)
+
+        # Convert ind_value to numeric
+        df_mapped["ind_value"] = pd.to_numeric(df_mapped["ind_value"], errors="coerce")
+
+        pivoted = df_mapped.pivot_table(
+            index=["end_date", "ts_code"], columns="field",
+            values="ind_value", aggfunc="first"
+        ).reset_index()
+        pivoted.columns.name = None
+        return pivoted
+
+    def _yf_hk_market_data(self, ts_code: str) -> dict | None:
+        """Fetch HK stock market data via yfinance (52-week, price, volume)."""
+        if not self._yf_available:
+            return None
+        try:
+            ticker = yf.Ticker(self._yf_ticker(ts_code))
+            info = ticker.info
+            return {
+                "close": info.get("regularMarketPrice") or info.get("previousClose"),
+                "high_52w": info.get("fiftyTwoWeekHigh"),
+                "low_52w": info.get("fiftyTwoWeekLow"),
+                "market_cap": info.get("marketCap"),
+                "volume_avg": info.get("averageDailyVolume10Day"),
+            }
+        except Exception:
+            return None
+
+    def _yf_weekly_history(self, ts_code: str) -> pd.DataFrame:
+        """Fetch 10-year weekly price history via yfinance."""
+        if not self._yf_available:
+            return pd.DataFrame()
+        try:
+            ticker = yf.Ticker(self._yf_ticker(ts_code))
+            df = ticker.history(period="10y", interval="1wk")
+            if df.empty:
+                return df
+            # Normalize column names to match Tushare weekly format
+            df = df.reset_index()
+            df = df.rename(columns={
+                "Date": "trade_date",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "vol",
+            })
+            df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
+            df["ts_code"] = ts_code
+            return df[["ts_code", "trade_date", "open", "high", "low", "close", "vol"]]
+        except Exception:
+            return pd.DataFrame()
+
+    def _yf_fill_missing_hk(self, pivoted, ts_code, statement_type):
+        """Fill NaN fields in pivoted HK DataFrame using yfinance data.
+
+        Args:
+            pivoted: DataFrame with Tushare data (one row per period).
+            ts_code: Tushare stock code (e.g. '00700.HK').
+            statement_type: 'income', 'balance', or 'cashflow'.
+
+        Returns:
+            (filled_df, yf_used_flag) tuple.
+        """
+        if not self._yf_available:
+            return pivoted, False
+
+        # Select mapping dict FIRST (before NaN check)
+        yf_map = {
+            "income": _YF_INCOME_MAP,
+            "balance": _YF_BALANCE_MAP,
+            "cashflow": _YF_CASHFLOW_MAP,
+        }.get(statement_type, {})
+        if not yf_map:
+            return pivoted, False
+
+        filled = pivoted.copy()
+
+        # Ensure all mapped target columns exist (allows filling completely absent fields)
+        mapped_ts_cols = set(yf_map.values())
+        for col in mapped_ts_cols - set(filled.columns):
+            filled[col] = float("nan")
+
+        # Check if any NaN in numeric columns (after column expansion)
+        numeric_cols = filled.select_dtypes(include="number").columns
+        if numeric_cols.empty or not filled[numeric_cols].isna().any().any():
+            return pivoted, False  # return ORIGINAL (no extra NaN cols)
+
+        # Build reverse map: tushare_col → list of yfinance field names
+        reverse = {}
+        for yf_name, ts_col in yf_map.items():
+            reverse.setdefault(ts_col, []).append(yf_name)
+
+        try:
+            ticker = yf.Ticker(self._yf_ticker(ts_code))
+            if statement_type == "income":
+                yf_df = ticker.income_stmt
+            elif statement_type == "balance":
+                yf_df = ticker.balance_sheet
+            else:
+                yf_df = ticker.cashflow
+        except Exception:
+            return pivoted, False  # return ORIGINAL on failure
+
+        if yf_df is None or yf_df.empty:
+            return pivoted, False  # return ORIGINAL on failure
+
+        yf_used = False
+
+        for idx, row in filled.iterrows():
+            end_date = str(row.get("end_date", ""))
+            if len(end_date) < 8:
+                continue
+
+            # Match yfinance column by date
+            yf_col = None
+            for col in yf_df.columns:
+                ts = pd.Timestamp(col)
+                col_date = ts.strftime("%Y%m%d")
+                if col_date == end_date:
+                    yf_col = col
+                    break
+            # Fallback: same year + month=12
+            if yf_col is None and end_date[4:] == "1231":
+                for col in yf_df.columns:
+                    ts = pd.Timestamp(col)
+                    if ts.year == int(end_date[:4]) and ts.month == 12:
+                        yf_col = col
+                        break
+            if yf_col is None:
+                continue
+
+            # Fill NaN fields from yfinance
+            for ts_col, yf_names in reverse.items():
+                if ts_col not in filled.columns:
+                    continue
+                val = filled.at[idx, ts_col]
+                if val is not None and val == val:  # not NaN
+                    continue
+                for yf_name in yf_names:
+                    if yf_name in yf_df.index:
+                        yf_val = yf_df.at[yf_name, yf_col]
+                        if yf_val is not None and yf_val == yf_val:
+                            filled.at[idx, ts_col] = float(yf_val)
+                            yf_used = True
+                            break
+
+        return filled, yf_used
+
     @rate_limit
     def _safe_call(self, api_name: str, **kwargs) -> pd.DataFrame:
         """Call a Tushare API endpoint with retry logic.
+
+        Auto-upgrades to VIP endpoints when broker is active.
 
         Args:
             api_name: The API endpoint name (e.g., 'stock_basic').
@@ -98,10 +399,15 @@ class TushareClient:
         Raises:
             RuntimeError: After MAX_RETRIES failures.
         """
+        # Auto-upgrade to VIP endpoint when broker is active
+        effective_name = api_name
+        if self._vip_mode and api_name in _VIP_MAP:
+            effective_name = _VIP_MAP[api_name]
+
         last_err = None
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                api_func = getattr(self.pro, api_name)
+                api_func = getattr(self.pro, effective_name)
                 df = api_func(**kwargs)
                 return df
             except Exception as e:
@@ -112,14 +418,33 @@ class TushareClient:
                         "ConnectionAborted" in str(e) or \
                         "RemoteDisconnected" in str(e)
                     if is_conn_err:
-                        print(f"[retry {attempt}/{self.MAX_RETRIES}] {api_name}: connection error, re-creating API client...", file=sys.stderr)
+                        print(f"[retry {attempt}/{self.MAX_RETRIES}] {effective_name}: connection error, re-creating API client...", file=sys.stderr)
                         self.pro = ts.pro_api(timeout=30)
+                        # Re-apply broker hacks after re-creating client
+                        api_url = get_api_url()
+                        if api_url:
+                            self.pro._DataApi__token = self.token
+                            self.pro._DataApi__http_url = api_url
                     else:
-                        print(f"[retry {attempt}/{self.MAX_RETRIES}] {api_name}: {e}", file=sys.stderr)
+                        print(f"[retry {attempt}/{self.MAX_RETRIES}] {effective_name}: {e}", file=sys.stderr)
                     time.sleep(self.RETRY_DELAY * attempt)
         raise RuntimeError(
-            f"Tushare API '{api_name}' failed after {self.MAX_RETRIES} retries: {last_err}"
+            f"Tushare API '{effective_name}' failed after {self.MAX_RETRIES} retries: {last_err}"
         )
+
+    def _cached_basic_call(self, api_name: str, **kwargs) -> pd.DataFrame:
+        """Call stock_basic/hk_basic with 7-day file cache."""
+        ts_code = kwargs.get("ts_code", "all")
+        cache_file = os.path.join(self._cache_dir, f"{api_name}_{ts_code}.json")
+        if os.path.exists(cache_file):
+            mtime = os.path.getmtime(cache_file)
+            if time.time() - mtime < self.BASIC_CACHE_TTL:
+                return pd.read_json(cache_file)
+        df = self._safe_call(api_name, **kwargs)
+        if not df.empty:
+            os.makedirs(self._cache_dir, exist_ok=True)
+            df.to_json(cache_file, orient="records", force_ascii=False)
+        return df
 
     @staticmethod
     def _prepare_display_periods(df, max_annual=5):
@@ -172,9 +497,12 @@ class TushareClient:
     # --- Feature #14: Section 1 — Basic company info ---
 
     def get_basic_info(self, ts_code: str) -> str:
-        """Section 1: Basic company info from stock_basic + daily_basic."""
-        basic = self._safe_call("stock_basic", ts_code=ts_code,
-                                fields="ts_code,name,industry,area,market,exchange,list_date,fullname")
+        """Section 1: Basic company info from stock_basic/hk_basic + daily_basic/hk_fina_indicator."""
+        if self._is_hk(ts_code):
+            return self._get_basic_info_hk(ts_code)
+
+        basic = self._cached_basic_call("stock_basic", ts_code=ts_code,
+                                       fields="ts_code,name,industry,area,market,exchange,list_date,fullname")
         if basic.empty:
             return format_header(2, "1. 基本信息") + "\n\n数据缺失\n"
 
@@ -212,10 +540,64 @@ class TushareClient:
         lines.append(info_table)
         return "\n".join(lines)
 
+    def _get_basic_info_hk(self, ts_code: str) -> str:
+        """Section 1 (HK): Basic info from hk_basic + hk_fina_indicator."""
+        basic = self._cached_basic_call("hk_basic", ts_code=ts_code,
+                                       fields="ts_code,name,fullname,market,list_date,enname")
+        if basic.empty:
+            return format_header(2, "1. 基本信息") + "\n\n数据缺失\n"
+
+        row = basic.iloc[0]
+
+        # Get PE/PB/market_cap from hk_fina_indicator
+        val_rows = []
+        try:
+            fina = self._safe_call("hk_fina_indicator", ts_code=ts_code,
+                                   fields="ts_code,end_date,pe_ttm,pb_ttm,total_market_cap,hksk_market_cap")
+            if not fina.empty:
+                self._store["basic_info"] = fina
+                d = fina.iloc[0]
+                # Try yfinance for current price
+                close_price = "—"
+                yf_data = self._yf_hk_market_data(ts_code)
+                if yf_data and yf_data.get("close"):
+                    close_price = f"{yf_data['close']:.2f}"
+                    # Store close for downstream
+                    fina_copy = fina.copy()
+                    fina_copy["close"] = yf_data["close"]
+                    self._store["basic_info"] = fina_copy
+                val_rows = [
+                    ["当前价格 (HKD)", close_price],
+                    ["PE (TTM)", f"{d.get('pe_ttm', '—')}"],
+                    ["PB", f"{d.get('pb_ttm', '—')}"],
+                    ["总市值 (百万港元)", format_number(d.get('total_market_cap', None), divider=1, decimals=2)],
+                ]
+        except RuntimeError:
+            pass
+
+        lines = [format_header(2, "1. 基本信息"), ""]
+        info_table = format_table(
+            ["项目", "内容"],
+            [
+                ["股票代码", str(row.get("ts_code", ""))],
+                ["公司名称", str(row.get("name", ""))],
+                ["全称", str(row.get("fullname", ""))],
+                ["英文名", str(row.get("enname", ""))],
+                ["市场", str(row.get("market", ""))],
+                ["上市日期", str(row.get("list_date", ""))],
+            ] + val_rows,
+            alignments=["l", "r"],
+        )
+        lines.append(info_table)
+        return "\n".join(lines)
+
     # --- Feature #15: Section 2 — Market data ---
 
     def get_market_data(self, ts_code: str) -> str:
         """Section 2: Current price and 52-week range."""
+        if self._is_hk(ts_code):
+            return self._get_market_data_hk(ts_code)
+
         today = pd.Timestamp.now().strftime("%Y%m%d")
         year_ago = (pd.Timestamp.now() - pd.DateOffset(years=1)).strftime("%Y%m%d")
 
@@ -249,10 +631,70 @@ class TushareClient:
         lines.append(table)
         return "\n".join(lines)
 
+    def _get_market_data_hk(self, ts_code: str) -> str:
+        """Section 2 (HK): Market data via yfinance (primary) or hk_daily fallback."""
+        lines = [format_header(2, "2. 市场行情"), ""]
+
+        # Primary: yfinance
+        yf_data = self._yf_hk_market_data(ts_code)
+        if yf_data and yf_data.get("close"):
+            rows = [["最新价格 (HKD)", f"{yf_data['close']:.2f}"]]
+            if yf_data.get("high_52w"):
+                rows.append(["52周最高", f"{yf_data['high_52w']:.2f}"])
+            if yf_data.get("low_52w"):
+                rows.append(["52周最低", f"{yf_data['low_52w']:.2f}"])
+            if yf_data.get("market_cap"):
+                rows.append(["总市值", format_number(yf_data["market_cap"], divider=1e6)])
+            if yf_data.get("volume_avg"):
+                rows.append(["10日均量", f"{yf_data['volume_avg']:,.0f}"])
+            table = format_table(["指标", "数值"], rows, alignments=["l", "r"])
+            lines.append(table)
+            return "\n".join(lines)
+
+        # Fallback: hk_daily (requires broker permission)
+        df = pd.DataFrame()
+        try:
+            today = pd.Timestamp.now().strftime("%Y%m%d")
+            year_ago = (pd.Timestamp.now() - pd.DateOffset(years=1)).strftime("%Y%m%d")
+            df = self._safe_call("hk_daily", ts_code=ts_code,
+                                 start_date=year_ago, end_date=today,
+                                 fields="ts_code,trade_date,open,high,low,close,vol,amount")
+        except RuntimeError:
+            pass
+
+        if not df.empty:
+            latest_close = df.iloc[0]["close"]
+            high_52w = df["high"].max()
+            low_52w = df["low"].min()
+            high_date = df.loc[df["high"].idxmax(), "trade_date"]
+            low_date = df.loc[df["low"].idxmin(), "trade_date"]
+            avg_vol = df["vol"].mean()
+
+            lines.append("*来源: Tushare hk_daily*\n")
+            table = format_table(
+                ["指标", "数值"],
+                [
+                    ["最新收盘价 (HKD)", f"{latest_close:.2f}"],
+                    ["52周最高", f"{high_52w:.2f} ({high_date})"],
+                    ["52周最低", f"{low_52w:.2f} ({low_date})"],
+                    ["52周涨跌幅", f"{(latest_close / low_52w - 1) * 100:.1f}% (自低点)"],
+                    ["日均成交量 (股)", f"{avg_vol:,.0f}"],
+                ],
+                alignments=["l", "r"],
+            )
+            lines.append(table)
+            return "\n".join(lines)
+
+        lines.append("数据缺失\n")
+        return "\n".join(lines)
+
     # --- Feature #16: Section 3 — Consolidated income statement ---
 
     def get_income(self, ts_code: str, report_type: str = "1") -> str:
         """Section 3: Five-year consolidated income statement."""
+        if self._is_hk(ts_code):
+            return self._get_income_hk(ts_code)
+
         df = self._safe_call("income", ts_code=ts_code,
                              report_type=report_type,
                              fields="ts_code,end_date,report_type,"
@@ -330,16 +772,83 @@ class TushareClient:
         lines.append("*单位: 百万元 (原始数据 / 1,000,000), EPS为元/股*")
         return "\n".join(lines)
 
+    def _get_income_hk(self, ts_code: str) -> str:
+        """Section 3 (HK): Income statement via hk_income line-item pivot."""
+        df = self._safe_call("hk_income", ts_code=ts_code,
+                             fields="ts_code,end_date,ind_name,ind_value")
+        lines = [format_header(2, "3. 合并利润表"), ""]
+
+        if df.empty:
+            lines.append("数据缺失\n")
+            return "\n".join(lines)
+
+        pivoted = self._pivot_hk_line_items(df, HK_INCOME_MAP)
+        if pivoted.empty:
+            lines.append("数据缺失 (无法匹配行项目)\n")
+            return "\n".join(lines)
+
+        pivoted, yf_used = self._yf_fill_missing_hk(pivoted, ts_code, "income")
+
+        pivoted, years = self._prepare_display_periods(pivoted)
+        self._store["income"] = pivoted
+        self._store["income_years"] = years
+
+        if not years:
+            lines.append("无年报数据\n")
+            return "\n".join(lines)
+
+        fields = [
+            ("营业额", "revenue"),
+            ("营运支出", "oper_cost"),
+            ("销售及分销费用", "sell_exp"),
+            ("行政开支", "admin_exp"),
+            ("经营溢利", "operate_profit"),
+            ("应占联营公司溢利", "invest_income"),
+            ("融资成本", "finance_exp"),
+            ("除税前溢利", "total_profit"),
+            ("税项", "income_tax"),
+            ("除税后溢利", "n_income"),
+            ("股东应占溢利", "n_income_attr_p"),
+            ("少数股东损益", "minority_gain"),
+            ("每股基本盈利 (HKD)", "basic_eps"),
+            ("每股摊薄盈利 (HKD)", "diluted_eps"),
+        ]
+
+        headers = ["项目 (百万港元)"] + years
+        rows = []
+        for label, col in fields:
+            row = [label]
+            for _, r in pivoted.iterrows():
+                val = r.get(col)
+                if col in ("basic_eps", "diluted_eps"):
+                    row.append(f"{val:.2f}" if val is not None and val == val else "—")
+                else:
+                    row.append(format_number(val))
+            rows.append(row)
+
+        table = format_table(headers, rows, alignments=["l"] + ["r"] * len(years))
+        lines.append(table)
+        lines.append("")
+        lines.append("*单位: 百万港元 (原始数据 / 1,000,000), EPS为港元/股*")
+        if yf_used:
+            lines.append("\n*部分缺失数据由 yfinance 补充*")
+        return "\n".join(lines)
+
     # --- Feature #17: Section 3P — Parent company income ---
 
     def get_income_parent(self, ts_code: str) -> str:
         """Section 3P: Five-year parent-company income statement."""
+        if self._is_hk(ts_code):
+            return format_header(2, "3P. 母公司利润表") + "\n\n数据缺失 (港股HKFRS不区分母/合并)\n"
         return self.get_income(ts_code, report_type="6")
 
     # --- Feature #18: Section 4 — Consolidated balance sheet ---
 
     def get_balance_sheet(self, ts_code: str, report_type: str = "1") -> str:
         """Section 4: Five-year consolidated balance sheet."""
+        if self._is_hk(ts_code):
+            return self._get_balance_sheet_hk(ts_code)
+
         df = self._safe_call("balancesheet", ts_code=ts_code,
                              report_type=report_type,
                              fields="ts_code,end_date,report_type,"
@@ -433,16 +942,82 @@ class TushareClient:
         lines.append("*单位: 百万元*")
         return "\n".join(lines)
 
+    def _get_balance_sheet_hk(self, ts_code: str) -> str:
+        """Section 4 (HK): Balance sheet via hk_balancesheet line-item pivot."""
+        df = self._safe_call("hk_balancesheet", ts_code=ts_code,
+                             fields="ts_code,end_date,ind_name,ind_value")
+        lines = [format_header(2, "4. 合并资产负债表"), ""]
+
+        if df.empty:
+            lines.append("数据缺失\n")
+            return "\n".join(lines)
+
+        pivoted = self._pivot_hk_line_items(df, HK_BALANCE_MAP)
+        if pivoted.empty:
+            lines.append("数据缺失 (无法匹配行项目)\n")
+            return "\n".join(lines)
+
+        pivoted, yf_used = self._yf_fill_missing_hk(pivoted, ts_code, "balance")
+
+        pivoted, years = self._prepare_display_periods(pivoted)
+        self._store["balance_sheet"] = pivoted
+        self._store["balance_sheet_years"] = years
+
+        if not years:
+            lines.append("无年报数据\n")
+            return "\n".join(lines)
+
+        fields = [
+            ("现金及等价物", "money_cap"),
+            ("应收帐款", "accounts_receiv"),
+            ("存货", "inventories"),
+            ("流动资产合计", "total_cur_assets"),
+            ("联营公司权益", "lt_eqt_invest"),
+            ("物业厂房及设备", "fix_assets"),
+            ("无形资产", "intang_assets"),
+            ("总资产", "total_assets"),
+            ("应付帐款", "acct_payable"),
+            ("短期贷款", "st_borr"),
+            ("流动负债合计", "total_cur_liab"),
+            ("长期贷款", "lt_borr"),
+            ("总负债", "total_liab"),
+            ("递延税项资产", "defer_tax_assets"),
+            ("递延税项负债", "defer_tax_liab"),
+            ("股东权益", "total_hldr_eqy_exc_min_int"),
+            ("少数股东权益", "minority_int"),
+        ]
+
+        headers = ["项目 (百万港元)"] + years
+        rows = []
+        for label, col in fields:
+            row = [label]
+            for _, r in pivoted.iterrows():
+                row.append(format_number(r.get(col)))
+            rows.append(row)
+
+        table = format_table(headers, rows, alignments=["l"] + ["r"] * len(years))
+        lines.append(table)
+        lines.append("")
+        lines.append("*单位: 百万港元*")
+        if yf_used:
+            lines.append("\n*部分缺失数据由 yfinance 补充*")
+        return "\n".join(lines)
+
     # --- Feature #19: Section 4P — Parent company balance sheet ---
 
     def get_balance_sheet_parent(self, ts_code: str) -> str:
         """Section 4P: Five-year parent-company balance sheet."""
+        if self._is_hk(ts_code):
+            return format_header(2, "4P. 母公司资产负债表") + "\n\n数据缺失 (港股HKFRS不区分母/合并)\n"
         return self.get_balance_sheet(ts_code, report_type="6")
 
     # --- Feature #20: Section 5 — Cash flow statement ---
 
     def get_cashflow(self, ts_code: str) -> str:
         """Section 5: Five-year cash flow statement with FCF calculation."""
+        if self._is_hk(ts_code):
+            return self._get_cashflow_hk(ts_code)
+
         df = self._safe_call("cashflow", ts_code=ts_code,
                              report_type="1",
                              fields="ts_code,end_date,report_type,"
@@ -524,10 +1099,86 @@ class TushareClient:
         lines.append("*单位: 百万元; FCF = OCF - |Capex|*")
         return "\n".join(lines)
 
+    def _get_cashflow_hk(self, ts_code: str) -> str:
+        """Section 5 (HK): Cash flow via hk_cashflow line-item pivot."""
+        df = self._safe_call("hk_cashflow", ts_code=ts_code,
+                             fields="ts_code,end_date,ind_name,ind_value")
+        lines = [format_header(2, "5. 现金流量表"), ""]
+
+        if df.empty:
+            lines.append("数据缺失\n")
+            return "\n".join(lines)
+
+        pivoted = self._pivot_hk_line_items(df, HK_CASHFLOW_MAP)
+        if pivoted.empty:
+            lines.append("数据缺失 (无法匹配行项目)\n")
+            return "\n".join(lines)
+
+        pivoted, yf_used = self._yf_fill_missing_hk(pivoted, ts_code, "cashflow")
+
+        pivoted, years = self._prepare_display_periods(pivoted)
+        self._store["cashflow"] = pivoted
+        self._store["cashflow_years"] = years
+
+        if not years:
+            lines.append("无年报数据\n")
+            return "\n".join(lines)
+
+        headers = ["项目 (百万港元)"] + years
+        rows = []
+
+        simple_fields = [
+            ("经营业务现金净额 (OCF)", "n_cashflow_act"),
+            ("投资业务现金净额", "n_cashflow_inv_act"),
+            ("融资业务现金净额", "n_cash_flows_fnc_act"),
+            ("购建无形资产及其他资产", "c_pay_acq_const_fiolta"),
+            ("已付税项", "c_paid_for_taxes"),
+            ("收回投资所得现金", "c_recp_return_invest"),
+            ("已付股息(融资)", "c_pay_dist_dpcp_int_exp"),
+        ]
+        for label, col in simple_fields:
+            row = [label]
+            for _, r in pivoted.iterrows():
+                row.append(format_number(r.get(col)))
+            rows.append(row)
+
+        # D&A: single combined line for HK (no separate amort_intang_assets)
+        da_row = ["折旧及摊销 (D&A)"]
+        for _, r in pivoted.iterrows():
+            da = r.get("depr_fa_coga_dpba")
+            if da is not None and da == da:
+                da_row.append(format_number(da))
+            else:
+                da_row.append("—")
+        rows.append(da_row)
+
+        # FCF = OCF - |Capex|
+        fcf_row = ["自由现金流 (FCF)"]
+        for _, r in pivoted.iterrows():
+            ocf = r.get("n_cashflow_act")
+            capex = r.get("c_pay_acq_const_fiolta")
+            if ocf is not None and capex is not None:
+                fcf = float(ocf) - abs(float(capex))
+                fcf_row.append(format_number(fcf))
+            else:
+                fcf_row.append("—")
+        rows.append(fcf_row)
+
+        table = format_table(headers, rows, alignments=["l"] + ["r"] * len(years))
+        lines.append(table)
+        lines.append("")
+        lines.append("*单位: 百万港元; FCF = OCF - |Capex|; c_pay_to_staff 港股不可用*")
+        if yf_used:
+            lines.append("\n*部分缺失数据由 yfinance 补充*")
+        return "\n".join(lines)
+
     # --- Feature #21: Section 6 — Dividend history ---
 
     def get_dividends(self, ts_code: str) -> str:
         """Section 6: Dividend history."""
+        if self._is_hk(ts_code):
+            return self._get_dividends_hk(ts_code)
+
         df = self._safe_call("dividend", ts_code=ts_code,
                              fields="ts_code,end_date,ann_date,div_proc,"
                                     "stk_div,cash_div_tax,record_date,"
@@ -572,10 +1223,77 @@ class TushareClient:
         lines.append(table)
         return "\n".join(lines)
 
+    def _get_dividends_hk(self, ts_code: str) -> str:
+        """Section 6 (HK): Dividend history from hk_fina_indicator."""
+        lines = [format_header(2, "6. 分红历史"), ""]
+        try:
+            df = self._safe_call("hk_fina_indicator", ts_code=ts_code,
+                                 fields="ts_code,end_date,dps_hkd,divi_ratio")
+        except RuntimeError:
+            lines.append("数据缺失 (接口可能无权限)\n")
+            return "\n".join(lines)
+
+        if df.empty:
+            lines.append("暂无分红数据\n")
+            return "\n".join(lines)
+
+        df = df.drop_duplicates(subset=["end_date"])
+        df = df.sort_values("end_date", ascending=False).head(5)
+
+        # Store for derived metrics
+        self._store["dividends_hk"] = df
+
+        # Build a compatible dividends store for downstream (§17)
+        # Create synthetic dividend records with cash_div_tax = dps_hkd
+        div_records = []
+        for _, r in df.iterrows():
+            dps = self._safe_float(r.get("dps_hkd"))
+            if dps is not None and dps > 0:
+                div_records.append({
+                    "end_date": r.get("end_date"),
+                    "cash_div_tax": dps,
+                    "base_share": 1,  # DPS is per-share already
+                    "div_proc": "实施",
+                })
+        if div_records:
+            self._store["dividends"] = pd.DataFrame(div_records)
+
+        # Build EPS lookup for cross-validation
+        income_df = self._get_annual_df("income")
+        eps_lookup: dict[str, float] = {}
+        if not income_df.empty and "basic_eps" in income_df.columns:
+            for _, r2 in income_df.iterrows():
+                y = str(r2["end_date"])[:4]
+                eps = self._safe_float(r2.get("basic_eps"))
+                if eps and eps > 0:
+                    eps_lookup[y] = eps
+
+        headers = ["年度", "每股股息 (HKD)", "派息率 (%)"]
+        rows = []
+        for _, r in df.iterrows():
+            year = str(r.get("end_date", ""))[:4]
+            dps = r.get("dps_hkd")
+            ts_ratio = self._safe_float(r.get("divi_ratio"))
+            dps_f = self._safe_float(dps)
+            eps = eps_lookup.get(year)
+            payout = self._resolve_hk_payout(ts_ratio, dps_f, eps)
+            rows.append([
+                year,
+                f"{dps:.4f}" if dps is not None and dps == dps else "—",
+                f"{payout:.2f}" if payout is not None else "—",
+            ])
+
+        table = format_table(headers, rows, alignments=["l", "r", "r"])
+        lines.append(table)
+        return "\n".join(lines)
+
     # --- Feature #22: Section 11 + Appendix A — 10-year weekly prices ---
 
     def get_weekly_prices(self, ts_code: str) -> str:
         """Section 11 + Appendix A: 10-year weekly price history."""
+        if self._is_hk(ts_code):
+            return self._get_weekly_prices_hk(ts_code)
+
         today = pd.Timestamp.now().strftime("%Y%m%d")
         ten_years_ago = (pd.Timestamp.now() - pd.DateOffset(years=10)).strftime("%Y%m%d")
 
@@ -640,10 +1358,98 @@ class TushareClient:
         lines.append(annual_table)
         return "\n".join(lines)
 
+    def _get_weekly_prices_hk(self, ts_code: str) -> str:
+        """Section 11 (HK): Weekly prices via yfinance (primary) or hk_daily fallback."""
+        lines = [format_header(2, "11. 十年周线行情"), ""]
+
+        # Primary: yfinance
+        df = self._yf_weekly_history(ts_code)
+
+        # Fallback: hk_daily → resample to weekly
+        if df.empty:
+            try:
+                today = pd.Timestamp.now().strftime("%Y%m%d")
+                ten_years_ago = (pd.Timestamp.now() - pd.DateOffset(years=10)).strftime("%Y%m%d")
+                daily = self._safe_call("hk_daily", ts_code=ts_code,
+                                        start_date=ten_years_ago, end_date=today,
+                                        fields="ts_code,trade_date,open,high,low,close,vol,amount")
+                if not daily.empty:
+                    daily["trade_date"] = pd.to_datetime(daily["trade_date"])
+                    daily = daily.sort_values("trade_date")
+                    weekly = daily.resample("W-FRI", on="trade_date").agg({
+                        "open": "first", "high": "max", "low": "min",
+                        "close": "last", "vol": "sum",
+                    }).dropna(subset=["close"])
+                    weekly = weekly.reset_index()
+                    weekly["trade_date"] = weekly["trade_date"].dt.strftime("%Y%m%d")
+                    weekly["ts_code"] = ts_code
+                    df = weekly
+                    if not df.empty:
+                        lines.append("*来源: Tushare hk_daily*\n")
+            except RuntimeError:
+                pass
+
+        if df.empty:
+            lines.append("数据缺失\n")
+            return "\n".join(lines)
+
+        df = df.sort_values("trade_date", ascending=True)
+        self._store["weekly_prices"] = df
+
+        # 10-year summary (same logic as A-share)
+        high_10y = df["high"].max()
+        low_10y = df["low"].min()
+        high_date = df.loc[df["high"].idxmax(), "trade_date"]
+        low_date = df.loc[df["low"].idxmin(), "trade_date"]
+        latest_close = df.iloc[-1]["close"]
+
+        summary_table = format_table(
+            ["指标", "数值"],
+            [
+                ["10年最高 (HKD)", f"{high_10y:.2f} ({high_date})"],
+                ["10年最低 (HKD)", f"{low_10y:.2f} ({low_date})"],
+                ["最新收盘 (HKD)", f"{latest_close:.2f}"],
+                ["距最高回撤", f"{(1 - latest_close / high_10y) * 100:.1f}%"],
+                ["距最低涨幅", f"{(latest_close / low_10y - 1) * 100:.1f}%"],
+            ],
+            alignments=["l", "r"],
+        )
+        lines.append(summary_table)
+        lines.append("")
+
+        # Annual summary
+        df["year"] = df["trade_date"].str[:4]
+        annual = df.groupby("year").agg(
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+            avg_vol=("vol", "mean"),
+        ).reset_index()
+        annual = annual.sort_values("year", ascending=False)
+
+        lines.append(format_header(3, "年度行情汇总"))
+        lines.append("")
+        annual_table = format_table(
+            ["年度", "最高", "最低", "年末收盘", "周均成交量"],
+            [[
+                r["year"],
+                f"{r['high']:.2f}",
+                f"{r['low']:.2f}",
+                f"{r['close']:.2f}",
+                f"{r['avg_vol']:,.0f}",
+            ] for _, r in annual.iterrows()],
+            alignments=["l", "r", "r", "r", "r"],
+        )
+        lines.append(annual_table)
+        return "\n".join(lines)
+
     # --- Feature #23: Section 12 — Financial indicators ---
 
     def get_fina_indicators(self, ts_code: str) -> str:
-        """Section 12: Key financial indicators from fina_indicator endpoint."""
+        """Section 12: Key financial indicators from fina_indicator/hk_fina_indicator."""
+        if self._is_hk(ts_code):
+            return self._get_fina_indicators_hk(ts_code)
+
         df = self._safe_call("fina_indicator", ts_code=ts_code,
                              fields="ts_code,end_date,roe,roe_waa,"
                                     "grossprofit_margin,netprofit_margin,"
@@ -727,10 +1533,63 @@ class TushareClient:
         lines.append(table)
         return "\n".join(lines)
 
+    def _get_fina_indicators_hk(self, ts_code: str) -> str:
+        """Section 12 (HK): Financial indicators from hk_fina_indicator (structured)."""
+        df = self._safe_call("hk_fina_indicator", ts_code=ts_code,
+                             fields="ts_code,end_date,roe_avg,gross_profit_ratio,"
+                                    "net_profit_ratio,debt_asset_ratio,"
+                                    "pe_ttm,pb_ttm,operate_income_yoy,holder_profit_yoy,"
+                                    "bps,total_market_cap,hksk_market_cap")
+        lines = [format_header(2, "12. 关键财务指标"), ""]
+
+        if df.empty:
+            lines.append("数据缺失\n")
+            return "\n".join(lines)
+
+        df, years = self._prepare_display_periods(df)
+        self._store["fina_indicators"] = df
+        self._store["fina_indicators_years"] = years
+
+        if not years:
+            lines.append("无年报数据\n")
+            return "\n".join(lines)
+
+        pct_fields = [
+            ("ROE (%)", "roe_avg"),
+            ("毛利率 (%)", "gross_profit_ratio"),
+            ("净利率 (%)", "net_profit_ratio"),
+            ("资产负债率 (%)", "debt_asset_ratio"),
+        ]
+        growth_fields = [
+            ("营收同比增长率 (%)", "operate_income_yoy"),
+            ("净利润同比增长率 (%)", "holder_profit_yoy"),
+        ]
+        per_share_fields = [
+            ("每股净资产 (HKD)", "bps"),
+            ("PE (TTM)", "pe_ttm"),
+            ("PB", "pb_ttm"),
+        ]
+
+        headers = ["指标"] + years
+        rows = []
+        for label, col in pct_fields + growth_fields + per_share_fields:
+            row = [label]
+            for _, r in df.iterrows():
+                val = r.get(col)
+                row.append(f"{val:.2f}" if val is not None and val == val else "—")
+            rows.append(row)
+
+        table = format_table(headers, rows, alignments=["l"] + ["r"] * len(years))
+        lines.append(table)
+        return "\n".join(lines)
+
     # --- Feature #24: Section 9 — Business segments ---
 
     def get_segments(self, ts_code: str) -> str:
         """Section 9: Business segment data from fina_mainbz."""
+        if self._is_hk(ts_code):
+            return format_header(2, "9. 主营业务构成") + "\n\n数据缺失 (港股暂不支持)\n"
+
         lines = [format_header(2, "9. 主营业务构成"), ""]
         try:
             df = self._safe_call("fina_mainbz", ts_code=ts_code, type="P",
@@ -778,6 +1637,9 @@ class TushareClient:
 
     def get_holders(self, ts_code: str) -> str:
         """Section 7 (partial): Top 10 shareholders."""
+        if self._is_hk(ts_code):
+            return self._get_holders_hk(ts_code)
+
         lines = [format_header(2, "7. 股东与治理 (部分)"), ""]
 
         try:
@@ -812,8 +1674,72 @@ class TushareClient:
         lines.append(table)
         return "\n".join(lines)
 
+    def _get_holders_hk(self, ts_code: str) -> str:
+        """Section 7 (HK): Institutional holders via yfinance."""
+        lines = [format_header(2, "7. 股东与治理 (部分)"), ""]
+
+        if not self._yf_available:
+            lines.append("数据缺失 (yfinance不可用)")
+            lines.append("")
+            lines.append("*[§7 待Agent WebSearch补充]*")
+            return "\n".join(lines)
+
+        try:
+            ticker = yf.Ticker(self._yf_ticker(ts_code))
+            major = ticker.major_holders
+            inst = ticker.institutional_holders
+        except Exception:
+            lines.append("数据缺失 (yfinance不可用)")
+            lines.append("")
+            lines.append("*[§7 待Agent WebSearch补充]*")
+            return "\n".join(lines)
+
+        # Major holders summary
+        if major is not None and not major.empty:
+            lines.append("**持股概况**\n")
+            mh_headers = ["项目", "数值"]
+            mh_rows = []
+            for _, r in major.iterrows():
+                vals = list(r)
+                if len(vals) >= 2:
+                    mh_rows.append([str(vals[1]), str(vals[0])])
+            if mh_rows:
+                lines.append(format_table(mh_headers, mh_rows, alignments=["l", "r"]))
+                lines.append("")
+
+        # Institutional holders
+        if inst is not None and not inst.empty:
+            lines.append("**主要机构持股**\n")
+            ih_headers = ["机构名称", "持股数量", "占比 (%)", "报告日期"]
+            ih_rows = []
+            for _, r in inst.head(10).iterrows():
+                name = str(r.get("Holder", "—"))
+                shares = r.get("Shares")
+                pct = r.get("pctHeld") or r.get("% Out")
+                date_val = r.get("Date Reported")
+                shares_str = format_number(shares, divider=1e4, decimals=2) if shares is not None else "—"
+                pct_str = f"{float(pct) * 100:.2f}" if pct is not None and pct == pct else "—"
+                date_str = str(date_val)[:10] if date_val is not None else "—"
+                ih_rows.append([name, shares_str, pct_str, date_str])
+            lines.append(format_table(ih_headers, ih_rows, alignments=["l", "r", "r", "l"]))
+            lines.append("")
+
+        if (major is None or major.empty) and (inst is None or inst.empty):
+            lines.append("数据缺失 (yfinance无持股数据)")
+            lines.append("")
+            lines.append("*[§7 待Agent WebSearch补充]*")
+            return "\n".join(lines)
+
+        lines.append("*数据来源: yfinance*")
+        lines.append("")
+        lines.append("*[§7 待Agent WebSearch补充: 控股股东、管理层变更、违规记录等定性信息]*")
+        return "\n".join(lines)
+
     def get_audit(self, ts_code: str) -> str:
         """Audit opinion info."""
+        if self._is_hk(ts_code):
+            return format_header(3, "审计意见") + "\n\n数据缺失 (港股暂不支持)\n"
+
         lines = [format_header(3, "审计意见"), ""]
         try:
             df = self._safe_call("fina_audit", ts_code=ts_code,
@@ -888,6 +1814,9 @@ class TushareClient:
 
     def get_repurchase(self, ts_code: str) -> str:
         """Section 15: Share repurchase data from repurchase endpoint."""
+        if self._is_hk(ts_code):
+            return format_header(2, "15. 股票回购") + "\n\n数据缺失 (港股暂不支持)\n"
+
         lines = [format_header(2, "15. 股票回购"), ""]
         try:
             df = self._safe_call("repurchase", ts_code=ts_code,
@@ -987,6 +1916,9 @@ class TushareClient:
 
     def get_pledge_stat(self, ts_code: str) -> str:
         """Section 16: Share pledge statistics from pledge_stat endpoint."""
+        if self._is_hk(ts_code):
+            return format_header(2, "16. 股权质押") + "\n\n不适用 (港股无此制度)\n"
+
         lines = [format_header(2, "16. 股权质押"), ""]
         try:
             df = self._safe_call("pledge_stat", ts_code=ts_code,
@@ -1049,6 +1981,94 @@ class TushareClient:
         for _, r in df.iterrows():
             year = str(r["end_date"])[:4]
             result.append((year, self._safe_float(r.get(col))))
+        return result
+
+    @staticmethod
+    def _resolve_hk_payout(ts_ratio: float | None, dps: float | None, eps: float | None) -> float | None:
+        """Resolve HK payout ratio (%) with Tushare fix + DPS/EPS cross-validation.
+
+        Steps:
+        1. Fix Tushare divi_ratio if < 1 (dirty data: decimal instead of %).
+        2. Self-compute from DPS / EPS × 100 if both available.
+        3. Cross-validate: prefer Tushare if diff < 20%, else use computed.
+        4. Fall back to whichever is available; None if neither.
+        """
+        # Step 1: fix Tushare divi_ratio if < 1
+        if ts_ratio is not None and ts_ratio < 1:
+            ts_ratio *= 100
+
+        # Step 2: self-compute from DPS / EPS
+        computed = None
+        if dps is not None and dps > 0 and eps is not None and eps > 0:
+            computed = dps / eps * 100
+
+        # Step 3: cross-validate and pick
+        if ts_ratio is not None and computed is not None:
+            diff = abs(ts_ratio - computed) / computed
+            return ts_ratio if diff < 0.2 else computed
+        if computed is not None:
+            return computed
+        if ts_ratio is not None:
+            return ts_ratio
+        return None
+
+    def _get_payout_by_year(self) -> dict[str, float]:
+        """Get payout ratio (%) by year from stored dividend data.
+
+        HK path: Tushare divi_ratio fix + DPS/EPS cross-validation.
+        A-share path: computes from cash_div × base_share × 10000 / net_income × 100.
+        """
+        # HK path: Tushare divi_ratio fix + DPS/EPS cross-validation
+        hk_df = self._store.get("dividends_hk")
+        if hk_df is not None and not hk_df.empty:
+            # Build EPS lookup from income statement
+            income_df = self._get_annual_df("income")
+            eps_lookup: dict[str, float] = {}
+            if not income_df.empty and "basic_eps" in income_df.columns:
+                for _, r in income_df.iterrows():
+                    year = str(r["end_date"])[:4]
+                    eps = self._safe_float(r.get("basic_eps"))
+                    if eps and eps > 0:
+                        eps_lookup[year] = eps
+
+            result: dict[str, float] = {}
+            for _, r in hk_df.iterrows():
+                year = str(r.get("end_date", ""))[:4]
+                if not year:
+                    continue
+                ts_ratio = self._safe_float(r.get("divi_ratio"))
+                dps = self._safe_float(r.get("dps_hkd"))
+                eps = eps_lookup.get(year)
+                resolved = self._resolve_hk_payout(ts_ratio, dps, eps)
+                if resolved is not None:
+                    result[year] = resolved
+            return result
+
+        # A-share path: compute from _store["dividends"] + _store["income"]
+        div_df = self._store.get("dividends")
+        income_df = self._get_annual_df("income")
+        if div_df is None or div_df.empty or income_df.empty:
+            return {}
+
+        # Build dividend total lookup by year
+        div_lookup = {}
+        for _, r in div_df.iterrows():
+            year = str(r.get("end_date", ""))[:4]
+            cash_div = self._safe_float(r.get("cash_div_tax")) or 0
+            base_share = self._safe_float(r.get("base_share")) or 0
+            div_lookup[year] = cash_div * base_share * 10000  # base_share is 万股
+
+        # Build net income lookup by year
+        np_lookup = {}
+        for _, r in income_df.iterrows():
+            year = str(r["end_date"])[:4]
+            np_lookup[year] = self._safe_float(r.get("n_income_attr_p"))
+
+        result = {}
+        for year, div_total in div_lookup.items():
+            np_val = np_lookup.get(year)
+            if div_total and np_val and np_val > 0:
+                result[year] = div_total / np_val * 100
         return result
 
     def _compute_financial_trends(self) -> str | None:
@@ -1116,24 +2136,8 @@ class TushareClient:
                     net_cash_series.append((year, None))
 
         # --- Payout ratio per year ---
-        div_df = self._store.get("dividends")
-        payout_series = []  # (year, payout_pct)
-        if div_df is not None and not div_df.empty:
-            # Build dividend total lookup by year
-            div_lookup = {}
-            for _, r in div_df.iterrows():
-                year = str(r.get("end_date", ""))[:4]
-                cash_div = self._safe_float(r.get("cash_div_tax")) or 0
-                base_share = self._safe_float(r.get("base_share")) or 0
-                div_total = cash_div * base_share * 10000  # base_share is 万股
-                div_lookup[year] = div_total
-
-            for y, np_val in np_series:
-                div_total = div_lookup.get(y)
-                if div_total and np_val and np_val > 0:
-                    payout_series.append((y, div_total / np_val * 100))
-                else:
-                    payout_series.append((y, None))
+        payout_lookup = self._get_payout_by_year()
+        payout_series = [(y, payout_lookup.get(y)) for y, _ in np_series]
 
         # --- Build table ---
         # Use income years as primary (most complete)
@@ -1301,25 +2305,8 @@ class TushareClient:
             summary_rows.append(["F（Capex/D&A 5年中位数）", "—", "数据不足"])
 
         # Payout ratio: M, N
-        div_df = self._store.get("dividends")
-        payout_ratios = []
-        if div_df is not None and not div_df.empty:
-            div_lookup = {}
-            for _, r in div_df.iterrows():
-                y = str(r.get("end_date", ""))[:4]
-                cash_div = self._safe_float(r.get("cash_div_tax")) or 0
-                base_share = self._safe_float(r.get("base_share")) or 0
-                div_lookup[y] = cash_div * base_share * 10000
-
-            # Use latest 3 years
-            for y in years_labels[:3]:
-                div_total = div_lookup.get(y)
-                for _, r in income_df.iterrows():
-                    if str(r["end_date"])[:4] == y:
-                        np_val = self._safe_float(r.get("n_income_attr_p"))
-                        if div_total and np_val and np_val > 0:
-                            payout_ratios.append(div_total / np_val * 100)
-                        break
+        payout_lookup = self._get_payout_by_year()
+        payout_ratios = [payout_lookup[y] for y in years_labels[:3] if y in payout_lookup]
 
         if payout_ratios:
             m_mean = sum(payout_ratios) / len(payout_ratios)
@@ -1753,26 +2740,11 @@ class TushareClient:
         else:
             ii = max(3.5, rf_val + 2.0)
 
-        # Read M (payout ratio) — same logic as §17.2
+        # Read M (payout ratio) — uses _get_payout_by_year helper
         income_df = self._get_annual_df("income")
-        div_df = self._store.get("dividends")
-        payout_ratios = []
-        if div_df is not None and not div_df.empty and not income_df.empty:
-            div_lookup = {}
-            for _, r in div_df.iterrows():
-                y = str(r.get("end_date", ""))[:4]
-                cash_div = self._safe_float(r.get("cash_div_tax")) or 0
-                base_share = self._safe_float(r.get("base_share")) or 0
-                div_lookup[y] = cash_div * base_share * 10000
-            years_labels = [str(r["end_date"])[:4] for _, r in income_df.iterrows()]
-            for y in years_labels[:3]:
-                div_total = div_lookup.get(y)
-                for _, r in income_df.iterrows():
-                    if str(r["end_date"])[:4] == y:
-                        np_val = self._safe_float(r.get("n_income_attr_p"))
-                        if div_total and np_val and np_val > 0:
-                            payout_ratios.append(div_total / np_val * 100)
-                        break
+        payout_lookup = self._get_payout_by_year()
+        years_labels = [str(r["end_date"])[:4] for _, r in income_df.iterrows()] if not income_df.empty else []
+        payout_ratios = [payout_lookup[y] for y in years_labels[:3] if y in payout_lookup]
         m_pct = sum(payout_ratios) / len(payout_ratios) if payout_ratios else None
         if m_pct is None:
             return None
@@ -2123,17 +3095,24 @@ class TushareClient:
 
         surpluses = [s[4] for s in surplus_data]
 
-        # AA_incl: mean of all years
-        aa_incl = sum(surpluses) / len(surpluses)
+        # AA_all: mean of all years (was aa_incl)
+        aa_all = sum(surpluses) / len(surpluses)
+
+        # AA_2y: mean of most recent 2 years (surplus_data sorted descending)
+        aa_2y = sum(surpluses[:2]) / min(2, len(surpluses)) if surpluses else aa_all
 
         # AA_excl: exclude years where base_surplus < 0
         positive_surpluses = [s for s in surpluses if s >= 0]
-        aa_excl = sum(positive_surpluses) / len(positive_surpluses) if positive_surpluses else aa_incl
+        aa_excl = sum(positive_surpluses) / len(positive_surpluses) if positive_surpluses else aa_all
+
+        # Default: use AA_2y; fallback to AA_all if <2 years of data
+        aa_selected = aa_2y if len(surpluses) >= 2 else aa_all
 
         # Store AA values for downstream use (§17.9 sensitivity)
-        aa_selected = aa_excl if (abs(aa_incl - aa_excl) / abs(aa_incl) * 100 > 30 if aa_incl != 0 else False) else aa_incl
         self._store["factor3_sensitivity"] = {
-            "aa_incl": aa_incl,
+            "aa_incl": aa_all,  # legacy key for backward compatibility
+            "aa_all": aa_all,
+            "aa_2y": aa_2y,
             "aa_excl": aa_excl,
             "aa_selected": aa_selected,
         }
@@ -2213,11 +3192,12 @@ class TushareClient:
         lines.append("")
 
         # Summary
-        lines.append(f"- AA（含全部年份均值）= {format_number(aa_incl)} 百万元")
-        lines.append(f"- AA（剔除负值年份均值）= {format_number(aa_excl)} 百万元")
-        diff_pct = abs(aa_incl - aa_excl) / abs(aa_incl) * 100 if aa_incl != 0 else 0
-        if diff_pct > 30:
-            lines.append(f"  ⚠️ 两者差异 {diff_pct:.1f}% > 30%，建议以 AA_excl 为基准")
+        lines.append(f"- AA_2y（近2年均值，默认基准）= {format_number(aa_2y)} 百万元")
+        lines.append(f"- AA_all（全部年份均值）= {format_number(aa_all)} 百万元")
+        lines.append(f"- AA_excl（剔除负值年份均值）= {format_number(aa_excl)} 百万元")
+        diff_2y_all_pct = abs(aa_2y - aa_all) / abs(aa_all) * 100 if aa_all != 0 else 0
+        if diff_2y_all_pct > 30:
+            lines.append(f"  ⚠️ AA_2y 与 AA_all 差异 {diff_2y_all_pct:.1f}% > 30%，请审核近2年是否存在非经常性高峰")
         lines.append(f"- 收入波动率 CV = {cv * 100:.2f}%" if cv is not None else "- 收入波动率 CV = —")
         lines.append(f"- 经营杠杆系数 λ = {lambda_median:.4f}" if lambda_median is not None else "- 经营杠杆系数 λ = —")
         lines.append(f"- λ可靠性 = {lambda_reliability}")
@@ -2311,22 +3291,40 @@ class TushareClient:
             lines.append(f"*报表币种: HKD*")
         lines.extend(["", "---", ""])
 
-        sections = [
-            ("1. 基本信息", self.get_basic_info),
-            ("2. 市场行情", self.get_market_data),
-            ("3. 合并利润表", self.get_income),
-            ("3P. 母公司利润表", self.get_income_parent),
-            ("4. 合并资产负债表", self.get_balance_sheet),
-            ("4P. 母公司资产负债表", self.get_balance_sheet_parent),
-            ("5. 现金流量表", self.get_cashflow),
-            ("6. 分红历史", self.get_dividends),
-            ("7. 股东与治理", self.get_holders),
-            ("9. 主营业务构成", self.get_segments),
-            ("11. 十年周线行情", self.get_weekly_prices),
-            ("12. 关键财务指标", self.get_fina_indicators),
-            ("15. 股票回购", self.get_repurchase),
-            ("16. 股权质押", self.get_pledge_stat),
-        ]
+        if self._is_hk(ts_code):
+            sections = [
+                ("1. 基本信息", self.get_basic_info),
+                ("2. 市场行情", self.get_market_data),
+                ("3. 合并利润表", self.get_income),
+                # No §3P for HK (HKFRS does not split parent/consolidated)
+                ("4. 合并资产负债表", self.get_balance_sheet),
+                # No §4P for HK
+                ("5. 现金流量表", self.get_cashflow),
+                ("6. 分红历史", self.get_dividends),
+                ("7. 股东与治理", self.get_holders),       # placeholder
+                ("9. 主营业务构成", self.get_segments),      # placeholder
+                ("11. 十年周线行情", self.get_weekly_prices),
+                ("12. 关键财务指标", self.get_fina_indicators),
+                ("15. 股票回购", self.get_repurchase),       # placeholder
+                ("16. 股权质押", self.get_pledge_stat),      # placeholder
+            ]
+        else:
+            sections = [
+                ("1. 基本信息", self.get_basic_info),
+                ("2. 市场行情", self.get_market_data),
+                ("3. 合并利润表", self.get_income),
+                ("3P. 母公司利润表", self.get_income_parent),
+                ("4. 合并资产负债表", self.get_balance_sheet),
+                ("4P. 母公司资产负债表", self.get_balance_sheet_parent),
+                ("5. 现金流量表", self.get_cashflow),
+                ("6. 分红历史", self.get_dividends),
+                ("7. 股东与治理", self.get_holders),
+                ("9. 主营业务构成", self.get_segments),
+                ("11. 十年周线行情", self.get_weekly_prices),
+                ("12. 关键财务指标", self.get_fina_indicators),
+                ("15. 股票回购", self.get_repurchase),
+                ("16. 股权质押", self.get_pledge_stat),
+            ]
 
         completed = 0
         for name, method in sections:
@@ -2393,34 +3391,45 @@ class TushareClient:
         # §13 Warnings: auto-detect + agent placeholder
         wc = WarningsCollector()
         try:
-            # Check missing data + YoY anomaly for core financial statements
-            for label, api, fields in [
-                ("合并利润表", "income", "ts_code,end_date,revenue,n_income_attr_p"),
-                ("合并资产负债表", "balancesheet", "ts_code,end_date,total_assets"),
-                ("现金流量表", "cashflow", "ts_code,end_date,n_cashflow_act"),
-            ]:
-                df = self._safe_call(api, ts_code=ts_code, fields=fields)
-                wc.check_missing_data(label, df)
-                if not df.empty and "end_date" in df.columns:
-                    # Filter to annual reports only (end_date ending in "1231")
-                    annual = df[df["end_date"].astype(str).str.endswith("1231")].copy()
-                    annual = annual.sort_values("end_date", ascending=False)
-                    if not annual.empty:
-                        dates = annual["end_date"].astype(str).str[:4].tolist()
-                        for col in fields.split(",")[2:]:  # skip ts_code, end_date
-                            if col in annual.columns:
-                                wc.check_yoy_change(label, col, annual[col].tolist(), dates=dates)
+            if self._is_hk(ts_code):
+                # HK: use stored data instead of re-calling A-share-only APIs
+                for label, store_key in [
+                    ("合并利润表", "income"),
+                    ("合并资产负债表", "balance_sheet"),
+                    ("现金流量表", "cashflow"),
+                ]:
+                    stored = self._store.get(store_key)
+                    wc.check_missing_data(label, stored if stored is not None else pd.DataFrame())
+            else:
+                # A-share: Check missing data + YoY anomaly for core financial statements
+                for label, api, fields in [
+                    ("合并利润表", "income", "ts_code,end_date,revenue,n_income_attr_p"),
+                    ("合并资产负债表", "balancesheet", "ts_code,end_date,total_assets"),
+                    ("现金流量表", "cashflow", "ts_code,end_date,n_cashflow_act"),
+                ]:
+                    df = self._safe_call(api, ts_code=ts_code, fields=fields)
+                    wc.check_missing_data(label, df)
+                    if not df.empty and "end_date" in df.columns:
+                        # Filter to annual reports only (end_date ending in "1231")
+                        annual = df[df["end_date"].astype(str).str.endswith("1231")].copy()
+                        annual = annual.sort_values("end_date", ascending=False)
+                        if not annual.empty:
+                            dates = annual["end_date"].astype(str).str[:4].tolist()
+                            for col in fields.split(",")[2:]:  # skip ts_code, end_date
+                                if col in annual.columns:
+                                    wc.check_yoy_change(label, col, annual[col].tolist(), dates=dates)
 
-            # Audit risk check
-            audit_df = self._safe_call("fina_audit", ts_code=ts_code,
-                                       fields="ts_code,end_date,audit_agency,audit_result")
-            if not audit_df.empty and "audit_result" in audit_df.columns:
-                wc.check_audit_risk(str(audit_df.iloc[0].get("audit_result", "")))
+                # Audit risk check
+                audit_df = self._safe_call("fina_audit", ts_code=ts_code,
+                                           fields="ts_code,end_date,audit_agency,audit_result")
+                if not audit_df.empty and "audit_result" in audit_df.columns:
+                    wc.check_audit_risk(str(audit_df.iloc[0].get("audit_result", "")))
 
-            # Balance sheet risk checks (goodwill, debt ratio)
-            bs_df = self._safe_call("balancesheet", ts_code=ts_code,
-                                    fields="ts_code,end_date,goodwill,total_assets,total_liab")
-            if not bs_df.empty:
+            # Balance sheet risk checks (goodwill, debt ratio) — use stored data for HK
+            bs_df = self._store.get("balance_sheet") if self._is_hk(ts_code) else \
+                self._safe_call("balancesheet", ts_code=ts_code,
+                                fields="ts_code,end_date,goodwill,total_assets,total_liab")
+            if bs_df is not None and not bs_df.empty:
                 latest = bs_df.iloc[0]
                 gw = latest.get("goodwill", 0) or 0
                 ta = latest.get("total_assets", 0) or 0
@@ -2448,6 +3457,13 @@ class TushareClient:
         else:
             lines.append("未检测到异常。")
             lines.append("")
+        if self._is_hk(ts_code):
+            lines.append("")
+            lines.append("> 港股数据覆盖有限：§9业务构成/§15回购 暂缺，"
+                         "§16质押不适用（港股无此制度），"
+                         "§3P/§4P母公司报表在HKFRS体系下不适用，c_pay_to_staff 不可用。")
+            lines.append("")
+
         lines.append("### 13.2 Agent WebSearch 补充")
         lines.append("")
         lines.append("*[§13.2 待Agent WebSearch补充]*")
