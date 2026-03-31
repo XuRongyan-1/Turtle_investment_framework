@@ -61,18 +61,44 @@
            │
            ▼
 ┌─────────────────────────────────────────────────┐
-│  Step 3：6维度定性分析                             │
-│                                                   │
-│  Agent 读取 qualitative_assessment.md 指令        │
-│  输入：data_pack_market.md                        │
-│  → 输出：qualitative_report.md                    │
-│    （完整报告 + 结构化参数表）                      │
+│  Step 3.0：数据预分发（Python 脚本）                │
+│  split_data_pack.py → data_splits/               │
+│  + D6 触发条件检查 → d6_trigger.json              │
+└──────────┬──────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────┐
+│  Step 3.1：Agent Team 并行分析                     │
+│                                                    │
+│  ┌──────────────┐  ┌──────────────┐               │
+│  │ Agent A       │  │ Agent B       │               │
+│  │ D1商业模式    │  │ D3外部环境    │               │
+│  │ D2护城河      │  │ D4管理层      │               │
+│  │               │  │ D5 MD&A       │               │
+│  └──────┬───────┘  └──────┬───────┘               │
+│         │    ┌─────────────┘                       │
+│         │    │  ┌──────────────┐                   │
+│         │    │  │ Agent C (条件)│                   │
+│         │    │  │ D6控股结构    │                   │
+│         │    │  └──────┬───────┘                   │
+│         └────┼─────────┘                           │
+│              ↓                                      │
+│  Step 3.2：Summary Agent                           │
+│    读取 A/B/C 输出                                  │
+│    → 执行摘要 + 深度总结 + 报告组装                  │
+│    → qualitative_report.md                         │
+└──────────┬──────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────┐
+│  Step 4：HTML 仪表盘报告                           │
+│  report_to_html.py → qualitative_report.html      │
 └──────────┬──────────────────────────────────────┘
            │
            ▼
 ┌─────────────────────────────────────────────────┐
 │           交付                                    │
-│  确认报告文件已生成，返回给用户                      │
+│  确认 MD + HTML 报告文件已生成，返回给用户          │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -120,23 +146,98 @@ Task(
 )
 ```
 
-### Step 3：6维度定性分析
+### Step 3.0：数据预分发
+
+```
+# 将 data_pack 按维度需求切割为子集 + D6 触发检查
+Bash(
+  command = "python3 scripts/split_data_pack.py --input {output_dir}/data_pack_market.md --output-dir {output_dir}/data_splits/",
+  description = "数据预分发"
+)
+# 输出：data_splits/d1d2_business_moat.md, d3d4d5_env_mgmt_mda.md, d6_trigger.json, [d6_holding.md]
+```
+
+### Step 3.1：Agent Team 并行分析
+
+以下 Agent A 和 Agent B **同时启动**（并行执行）。Agent C 根据 d6_trigger.json 决定是否启动。
+
+```
+# === Agent A：D1 商业模式 + D2 护城河（并行）===
+Task(
+  subagent_type = "general-purpose",
+  prompt = """
+  请阅读 {shared_dir}/qualitative/agents/agent_a_d1d2.md 中的完整指令。
+  同时加载：
+    - {shared_dir}/qualitative/references/judgment_examples.md（判断锚点）
+    - {shared_dir}/qualitative/references/framework_guide.md（框架定义）
+    - {shared_dir}/qualitative/agents/writing_style.md（写作风格）
+
+  数据文件：{output_dir}/data_splits/d1d2_business_moat.md
+
+  将输出写入：{output_dir}/data_splits/agent_a_output.md
+  """,
+  description = "Agent A: D1商业模式 + D2护城河"
+)
+
+# === Agent B：D3 外部环境 + D4 管理层 + D5 MD&A（并行）===
+Task(
+  subagent_type = "general-purpose",
+  prompt = """
+  请阅读 {shared_dir}/qualitative/agents/agent_b_d3d4d5.md 中的完整指令。
+  同时加载：
+    - {shared_dir}/qualitative/references/judgment_examples.md（判断锚点）
+    - {shared_dir}/qualitative/agents/writing_style.md（写作风格）
+
+  数据文件：{output_dir}/data_splits/d3d4d5_env_mgmt_mda.md
+
+  将输出写入：{output_dir}/data_splits/agent_b_output.md
+  """,
+  description = "Agent B: D3外部环境 + D4管理层 + D5MD&A"
+)
+
+# === Agent C：D6 控股结构（条件触发）===
+# 先读取 d6_trigger.json，若 triggered=true 则启动 Agent C
+# 若 triggered=false 则跳过（Summary Agent 会标注"不适用"）
+#
+# 若触发：
+Task(
+  subagent_type = "general-purpose",
+  prompt = """
+  请阅读 {shared_dir}/qualitative/qualitative_assessment.md 中"维度六：控股结构分析"部分的完整指令。
+  遵守 {shared_dir}/qualitative/agents/writing_style.md 的写作风格。
+
+  数据文件：{output_dir}/data_splits/d6_holding.md
+  触发原因：{d6_trigger.json 中的 reasons}
+
+  注意：即使触发条件满足，如果分析后判断不属于控股结构（如子公司为运营型全资子公司而非上市投资），
+  输出"不适用"并说明理由即可。
+
+  将输出写入：{output_dir}/data_splits/agent_c_output.md
+  """,
+  description = "Agent C: D6控股结构"
+)
+```
+
+等待 Agent A + Agent B（+ Agent C 若启动）全部完成。
+
+### Step 3.2：Summary Agent（报告组装）
 
 ```
 Task(
   subagent_type = "general-purpose",
   prompt = """
-  请阅读 {shared_dir}/qualitative/qualitative_assessment.md 中的完整指令。
+  请阅读 {shared_dir}/qualitative/agents/agent_summary.md 中的完整指令。
+  同时加载：{shared_dir}/qualitative/agents/writing_style.md（写作风格）
 
-  数据包文件：
-    - {output_dir}/data_pack_market.md
+  输入文件：
+    - {output_dir}/data_splits/agent_a_output.md（D1 + D2）
+    - {output_dir}/data_splits/agent_b_output.md（D3 + D4 + D5）
+    - {output_dir}/data_splits/agent_c_output.md（D6，若不存在则 D6=不适用）
+    - {output_dir}/data_pack_market.md（§1 基本信息，用于报告元数据）
 
-  注意：本次为独立运行模式，不存在 phase3_preflight.md。
-  使用 GAAP 归母净利润作为默认利润口径。
-
-  将定性分析输出写入：{output_dir}/qualitative_report.md
+  将最终报告写入：{output_dir}/qualitative_report.md
   """,
-  description = "6维度定性分析"
+  description = "Summary Agent: 执行摘要 + 总结 + 报告组装"
 )
 ```
 
