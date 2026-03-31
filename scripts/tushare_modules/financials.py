@@ -1041,8 +1041,27 @@ class FinancialsMixin:
         lines.append(table)
         return "\n".join(lines)
 
+    def _get_yf_annual_dividends(self, ts_code: str) -> dict[str, float] | None:
+        """Fetch annual DPS from yfinance, grouped by fiscal year. Returns {year: total_dps} or None."""
+        if not self._yf_available:
+            return None
+        try:
+            ticker = _yf().Ticker(self._yf_ticker(ts_code))
+            divs = ticker.dividends
+            if divs is None or divs.empty:
+                return None
+            divs_df = divs.reset_index()
+            divs_df.columns = ["date", "dividend"]
+            # Map to fiscal year: interim (Jul-Dec) → current FY, final (Jan-Jun) → previous FY
+            dates = pd.to_datetime(divs_df["date"])
+            divs_df["fy"] = dates.apply(lambda d: d.year if d.month >= 7 else d.year - 1)
+            annual = divs_df.groupby("fy")["dividend"].sum()
+            return {str(int(y)): v for y, v in annual.items() if v > 0}
+        except Exception:
+            return None
+
     def _get_dividends_hk(self, ts_code: str) -> str:
-        """Section 6 (HK): Dividend history from hk_fina_indicator."""
+        """Section 6 (HK): Dividend history from hk_fina_indicator + yfinance cross-validation."""
         lines = [format_header(2, "6. 分红历史"), ""]
         try:
             df = self._safe_call("hk_fina_indicator", ts_code=ts_code,
@@ -1061,11 +1080,34 @@ class FinancialsMixin:
         top_years = df["_year"].drop_duplicates().head(5).tolist()
         df = df[df["_year"].isin(top_years)].drop(columns=["_year"])
 
+        # --- yfinance cross-validation for stuck DPS bug ---
+        # Detect suspicious pattern: all dps_hkd values identical
+        dps_values = [self._safe_float(r.get("dps_hkd")) for _, r in df.iterrows()
+                      if self._safe_float(r.get("dps_hkd")) is not None and self._safe_float(r.get("dps_hkd")) > 0]
+        dps_looks_stuck = (len(dps_values) >= 3
+                           and len(set(round(v, 4) for v in dps_values)) == 1)
+
+        yf_annual: dict[str, float] | None = None
+        dps_source = "tushare"
+        if dps_looks_stuck:
+            yf_annual = self._get_yf_annual_dividends(ts_code)
+            if yf_annual:
+                # Only keep annual (Dec) rows from df, overwrite dps_hkd with yfinance
+                df = df[df["end_date"].astype(str).str[4:8] == "1231"].copy()
+                for idx, r in df.iterrows():
+                    year = str(r["end_date"])[:4]
+                    if year in yf_annual:
+                        df.at[idx, "dps_hkd"] = yf_annual[year]
+                dps_source = "yfinance"
+                self._store["_dividend_warning"] = (
+                    f"Tushare dps_hkd 疑似数据填充错误（所有期间值相同={dps_values[0]:.4f}），"
+                    f"已使用 yfinance 股息数据替代"
+                )
+
         # Store for derived metrics
         self._store["dividends_hk"] = df
 
         # Build a compatible dividends store for downstream (§17)
-        # Create synthetic dividend records with cash_div_tax = dps_hkd
         div_records = []
         for _, r in df.iterrows():
             dps = self._safe_float(r.get("dps_hkd"))
@@ -1106,6 +1148,8 @@ class FinancialsMixin:
 
         table = format_table(headers, rows, alignments=["l", "r", "r"])
         lines.append(table)
+        if dps_source == "yfinance":
+            lines.append(f"\n*⚠️ DPS 数据来源: yfinance（Tushare dps_hkd 数据异常已替换）*")
         return "\n".join(lines)
 
     def _get_dividends_us(self, ts_code: str) -> str:

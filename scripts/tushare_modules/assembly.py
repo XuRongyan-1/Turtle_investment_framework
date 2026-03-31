@@ -231,6 +231,14 @@ class AssemblyMixin:
                 tl = latest.get("total_liab", 0) or 0
                 wc.check_goodwill_ratio(float(gw), float(ta))
                 wc.check_debt_ratio(float(tl), float(ta))
+            # Dividend data correction warning (from _get_dividends_hk)
+            div_warn = self._store.get("_dividend_warning")
+            if div_warn:
+                wc.warnings.append({
+                    "type": "DATA_CORRECTION",
+                    "severity": "中",
+                    "message": div_warn,
+                })
         except Exception:
             pass  # warnings are best-effort; don't block assembly
 

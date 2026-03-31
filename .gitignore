@@ -32,6 +32,7 @@ Thumbs.db
 output/*
 !output/.gitkeep
 scripts/output/
+notebooks/output/
 
 # Sensitive
 .env
