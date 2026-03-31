@@ -20,13 +20,24 @@ python3 scripts/tushare_collector.py --code $ARGUMENTS --output output/{code}_{c
 - Collect: management/governance (§7), industry/competition (§8), MD&A (§10)
 - Append results to data_pack_market.md
 
-### Step 3: 6-Dimension Qualitative Analysis (Agent)
-- Read shared/qualitative/qualitative_assessment.md for analysis framework
-- Load shared/qualitative/references/judgment_examples.md for judgment anchors
-- Load shared/qualitative/references/framework_guide.md for rating definitions
-- If HK stock: also load shared/qualitative/references/market_rules_hk.md
-- If US stock: also load shared/qualitative/references/market_rules_us.md
-- Report must include: Executive Summary (top) + 6 Dimensions + Deep Conclusion (2-3 pages)
+### Step 3.0: Data Pre-split (Python script)
+```bash
+python3 scripts/split_data_pack.py --input output/{code}_{company}/data_pack_market.md --output-dir output/{code}_{company}/data_splits/
+```
+
+### Step 3.1: Agent Team Parallel Analysis
+Launch Agent A and Agent B **in parallel** (use a single message with multiple Agent tool calls):
+- **Agent A** (D1+D2): Read shared/qualitative/agents/agent_a_d1d2.md + judgment_examples.md + framework_guide.md
+  - Input: data_splits/d1d2_business_moat.md → Output: data_splits/agent_a_output.md
+- **Agent B** (D3+D4+D5): Read shared/qualitative/agents/agent_b_d3d4d5.md + judgment_examples.md
+  - Input: data_splits/d3d4d5_env_mgmt_mda.md → Output: data_splits/agent_b_output.md
+- **Agent C** (D6, conditional): Only if data_splits/d6_trigger.json shows triggered=true
+  - Input: data_splits/d6_holding.md → Output: data_splits/agent_c_output.md
+
+### Step 3.2: Summary Agent (Report Assembly)
+- Read shared/qualitative/agents/agent_summary.md
+- Input: agent_a_output.md + agent_b_output.md + [agent_c_output.md]
+- Generates: Executive Summary + Deep Conclusion (2-3 pages) + assembles final report
 - Output: output/{code}_{company}/qualitative_report.md
 
 ### Step 4: Generate HTML Dashboard Report (Python script)
