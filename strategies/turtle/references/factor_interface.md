@@ -1,7 +1,13 @@
 # 因子间参数传递接口（Factor Interface Schema）
 
-> 定义 Agent 间显式传递的参数名、类型和来源。消除"传递了什么"的歧义。
+> 定义龟龟策略 Agent 间显式传递的参数名、类型和来源。消除"传递了什么"的歧义。
 > Agent A/B 输出时按 schema 列出参数值，Agent C 输入时按 schema 校验。
+>
+> **Agent A 定性参数来源**：Agent A 输出的结构化参数基于通用定性分析模块
+> （`shared/qualitative/references/output_schema.md`），本文件定义龟龟策略所需的子集和映射。
+>
+> **值域映射**：通用模块 `moat_rating` 值域为 (强/中/弱)，
+> 龟龟策略映射为 (优质/中性/负面)：强→优质，中→中性，弱→负面。
 
 ---
 

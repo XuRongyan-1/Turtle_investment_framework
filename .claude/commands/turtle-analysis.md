@@ -1,13 +1,13 @@
 Run a full Turtle Investment Framework (龟龟投资策略) analysis on stock: $ARGUMENTS
 
 ## Input Validation
-- Stock code must be a valid A-share (e.g., 600887, 000858.SZ) or HK stock (00700.HK)
+- Stock code must be a valid A-share (e.g., 600887, 000858.SZ), HK stock (00700.HK), or US stock (AAPL)
 - If $ARGUMENTS is empty or invalid, ask the user for a valid stock code before proceeding
 - If only digits are given, the code will be normalized by scripts/config.py
 
 ## Execution Instructions
 
-Read prompts/coordinator.md for the full pipeline specification, then execute each phase:
+Read strategies/turtle/coordinator.md for the full pipeline specification, then execute each phase:
 
 ### Phase 0: PDF Acquisition (conditional)
 - Check if annual report PDF already exists in output/{code}_{company}/
@@ -21,9 +21,9 @@ python3 scripts/tushare_collector.py --code $ARGUMENTS --output output/{code}_{c
 ```
 
 ### Phase 1B: WebSearch Qualitative Data (Agent)
-- Read prompts/phase1_数据采集.md for WebSearch instructions
+- Read strategies/turtle/phase1_数据采集.md for WebSearch instructions
 - Collect: management background, industry analysis, competitive landscape, recent news
-- Append results to data_pack_market.md sections §8, §9B, §10
+- Append results to data_pack_market.md sections §7, §8, §9B, §10, §13
 
 ### Phase 2A: PDF Preprocessing (Python script, skip if no PDF)
 ```bash
@@ -31,13 +31,16 @@ python3 scripts/pdf_preprocessor.py --pdf output/{code}_{company}/*.pdf --output
 ```
 
 ### Phase 2B: PDF Structured Extraction (Agent, skip if no PDF)
-- Read prompts/phase2_PDF解析.md for extraction instructions
+- Read strategies/turtle/phase2_PDF解析.md for extraction instructions
 - Extract P2/P3/P4/P6/P13 + MDA + SUB from pdf_sections.json
 - Output: output/{code}_{company}/data_pack_report.md
 
-### Phase 3: 4-Factor Analysis and Report (Agent)
-- Read prompts/phase3_分析与报告.md for analysis framework
-- Load references/ factor files as needed
+### Phase 3: Analysis and Report (parallel Agent architecture)
+- **Step 3.0**: Read strategies/turtle/phase3_preflight.md for data validation
+- **Step 3.1a Agent A**: Read shared/qualitative/qualitative_assessment.md for 6-dimension qualitative analysis (shared module)
+  - Also load strategies/turtle/references/factor_interface.md for turtle-specific parameter mapping
+- **Step 3.1b Agent B**: Read strategies/turtle/phase3_quantitative.md for penetrating return rate calculation
+- **Step 3.2 Agent C**: Read strategies/turtle/phase3_valuation.md for valuation + report assembly
 - Output: output/{code}_{company}/{company}_{code}_分析报告.md
 
 ## Error Recovery
