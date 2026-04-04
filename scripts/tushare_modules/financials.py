@@ -986,6 +986,28 @@ class FinancialsMixin:
 
     # --- Feature #21: Section 6 — Dividend history ---
 
+    @staticmethod
+    def _get_report_period(end_date: str) -> str:
+        """根据 end_date 识别报告期类型。
+
+        Args:
+            end_date: 报告期日期，格式如 '20241231', '20240630'
+
+        Returns:
+            报告期类型：年报/中报/一季报/三季报/其他
+        """
+        if not end_date or len(str(end_date)) < 8:
+            return "其他"
+        end_str = str(end_date)
+        month_day = end_str[4:8]
+        period_map = {
+            "0331": "一季报",
+            "0630": "中报",
+            "0930": "三季报",
+            "1231": "年报",
+        }
+        return period_map.get(month_day, "其他")
+
     def get_dividends(self, ts_code: str) -> str:
         """Section 6: Dividend history."""
         if self._is_hk(ts_code):
@@ -1019,16 +1041,19 @@ class FinancialsMixin:
             lines.append("暂无已实施分红\n")
             return "\n".join(lines)
 
-        headers = ["年度", "每股现金分红(税前)", "每股送股", "登记日", "除权日", "总分红 (百万元)"]
+        headers = ["年度", "报告期", "每股现金分红(税前)", "每股送股", "登记日", "除权日", "总分红 (百万元)"]
         rows = []
         for _, r in df.iterrows():
-            year = str(r.get("end_date", ""))[:4]
+            end_date = str(r.get("end_date", ""))
+            year = end_date[:4]
+            period = self._get_report_period(end_date)
             cash_div = r.get("cash_div_tax", 0) or 0
             stk_div = r.get("stk_div", 0) or 0
             base_share = r.get("base_share", 0) or 0
             total_div = cash_div * base_share * 10000  # base_share is 万股, convert to shares
             rows.append([
                 year,
+                period,
                 f"{cash_div:.4f}",
                 f"{stk_div:.2f}" if stk_div else "—",
                 str(r.get("record_date", "—")),
