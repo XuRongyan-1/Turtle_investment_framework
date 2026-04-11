@@ -28,38 +28,55 @@ Determine the market and format the code:
 
 ## Step 1: Search for the Report
 
-Use the **WebSearch** tool to find the PDF.
+Use the **WebSearch** tool to find the PDF. Search sources are tried in priority order.
 
-### Build the search query:
+### If no year was specified — determine the latest fiscal year:
 
-**For A-share stocks:**
+Annual reports for fiscal year N are published between January and April of year N+1.
+
+1. Let `latest_fiscal_year` = current calendar year − 1 (e.g., in 2026 → search for FY2025)
+2. Search for `latest_fiscal_year` first
+3. If no results, fall back to `latest_fiscal_year − 1` (e.g., FY2024)
+
+### Search priority (try each in order until PDF found):
+
+**Round 1 — 巨潮资讯网 (cninfo.com.cn, official CSRC disclosure platform):**
+
+For A-share stocks (巨潮搜索用公司名称效果更好):
+- 年报: `site:cninfo.com.cn {company_name} {year} 年度报告`
+- 中报: `site:cninfo.com.cn {company_name} {year} 半年度报告`
+- 一季报: `site:cninfo.com.cn {company_name} {year} 第一季度报告`
+- 三季报: `site:cninfo.com.cn {company_name} {year} 第三季度报告`
+
+If company name is unknown, use stock code: `site:cninfo.com.cn {formatted_code} {year} 年度报告`
+
+**Round 2 — 雪球 (stockn.xueqiu.com):**
+
+For A-share stocks:
 - 年报: `site:stockn.xueqiu.com {formatted_code} 年度报告 {year}`
 - 中报: `site:stockn.xueqiu.com {formatted_code} 半年度报告 {year}`
 - 一季报: `site:stockn.xueqiu.com {formatted_code} 第一季度报告 {year}`
 - 三季报: `site:stockn.xueqiu.com {formatted_code} 第三季度报告 {year}`
 
-**For HK stocks:**
+For HK stocks:
 - 年报/annual: `site:stockn.xueqiu.com {formatted_code} annual report {year}`
 - 中报/interim: `site:stockn.xueqiu.com {formatted_code} interim report {year}`
 
-### If no year was specified:
-1. Try current year first
-2. If no results, try previous year
-3. Pick the most recent matching result
+**Round 3 — 同花顺 (notice.10jqka.com.cn):**
+- `site:notice.10jqka.com.cn {company_name} {year} {search_keyword}`
 
-### If no results found:
-1. Retry with **同花顺**: `site:notice.10jqka.com.cn {formatted_code} {search_keyword} {year}`
-   - Can also try with company name if known, e.g.: `site:notice.10jqka.com.cn 伊利股份 2024 年度报告`
-2. If still no results, retry **without** any `site:` prefix as a last resort.
+**Round 4 — 无限制搜索 (last resort):**
+- `{company_name} {formatted_code} {year} 年度报告 PDF`
 
 ## Step 2: Extract PDF Links
 
 From the search results, filter URLs that match PDF links from supported sources:
 ```
+https://static.cninfo.com.cn/.../*.pdf (or *.PDF)
 https://stockn.xueqiu.com/.../*.pdf
 https://notice.10jqka.com.cn/.../*.pdf
 ```
-Accept any direct PDF link from these domains.
+Accept any direct PDF link from these domains. Note: cninfo URLs may use uppercase `.PDF` extension.
 
 Collect all matching PDF URLs and their titles/descriptions.
 

@@ -170,6 +170,7 @@ Task(
   同时加载：
     - {shared_dir}/qualitative/references/judgment_examples.md（判断锚点）
     - {shared_dir}/qualitative/references/framework_guide.md（框架定义）
+    - {shared_dir}/qualitative/references/framework_scope.md（适用范围与局限性）
     - {shared_dir}/qualitative/agents/writing_style.md（写作风格）
 
   数据文件：{output_dir}/data_splits/d1d2_business_moat.md
@@ -283,6 +284,7 @@ Bash(
 │   │   ├── output_schema.md                   ← 参数 schema
 │   │   ├── judgment_examples.md               ← 判断锚点
 │   │   ├── framework_guide.md                 ← 框架说明（固定附录）
+│   │   ├── framework_scope.md                 ← 适用范围与局限性声明
 │   │   ├── market_rules_hk.md                 ← 港股规则（条件加载）
 │   │   └── market_rules_us.md                 ← 美股规则（条件加载）
 │   └── templates/
