@@ -22,6 +22,7 @@ ENV/
 .claude/*
 !.claude/commands/
 !.claude/skills/
+.claude/commands/report-to-html.md
 .agents/
 
 # OS
